@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, useTransition } from "react";
 
 const API_URL = "http://localhost:5200/api";
 
@@ -36,6 +36,8 @@ interface BattleState {
 export function InteractiveBattle() {
   const [battleId, setBattleId] = useState<string | null>(null);
   const [gameLog, setGameLog] = useState<string[]>([]);
+  const [isTurnLocked, setIsTurnLocked] = useState(false);
+  const [isTransitioning, startTransition] = useTransition();
 
   // Start new battle
   const startBattle = useMutation({
@@ -89,11 +91,25 @@ export function InteractiveBattle() {
 
       return p2Response.json() as Promise<BattleState>;
     },
-    onSuccess: (data) => {
-      if (data.turnLog.length > 0) {
-        setGameLog((prev) => [...prev, ...data.turnLog, ""]);
+    onMutate: () => {
+      setIsTurnLocked(true);
+    },
+    onSuccess: async (data) => {
+      try {
+        if (data.turnLog.length > 0) {
+          startTransition(() => {
+            setGameLog((prev) => [...prev, ...data.turnLog, ""]);
+          });
+        }
+        await refetchState();
+      } finally {
+        startTransition(() => {
+          setIsTurnLocked(false);
+        });
       }
-      refetchState();
+    },
+    onError: () => {
+      setIsTurnLocked(false);
     },
   });
 
@@ -149,6 +165,8 @@ export function InteractiveBattle() {
       </div>
     );
   }
+
+  const isMoveLocked = submitMove.isPending || isTurnLocked || isTransitioning;
 
   return (
     <div className="space-y-6">
@@ -281,7 +299,7 @@ export function InteractiveBattle() {
               <button
                 key={index}
                 onClick={() => submitMove.mutate(index + 1)}
-                disabled={submitMove.isPending}
+                disabled={isMoveLocked}
                 className={`${getTypeColor(
                   move.type
                 )} hover:opacity-80 text-white font-bold py-4 px-6 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg`}
@@ -299,7 +317,7 @@ export function InteractiveBattle() {
               </button>
             ))}
           </div>
-          {submitMove.isPending && (
+          {isMoveLocked && (
             <div className="text-center mt-4 text-yellow-300 animate-pulse">
               ⚔️ Processing turn...
             </div>
