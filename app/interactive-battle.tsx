@@ -795,54 +795,28 @@ export function InteractiveBattle() {
   });
 
   const liveBattleState = stateQuery.data ?? battleStateSnapshot;
+  const p1RecommendedMoves = p1MovesQuery.data?.recommendedMoves ?? [];
+  const p2RecommendedMoves = p2MovesQuery.data?.recommendedMoves ?? [];
 
-  useEffect(() => {
-    const pokemonName = setup.p1.selectedPokemon?.name;
-    const recommended = p1MovesQuery.data?.recommendedMoves ?? [];
-    if (!pokemonName || recommended.length === 0) return;
-    if (setup.p1.selectedMoves.length > 0) return;
+  const p1ResolvedSelectedMoves =
+    setup.p1.autoMoves && setup.p1.selectedMoves.length === 0
+      ? p1RecommendedMoves.slice(0, 4)
+      : setup.p1.selectedMoves;
+  const p2ResolvedSelectedMoves =
+    setup.p2.autoMoves && setup.p2.selectedMoves.length === 0
+      ? p2RecommendedMoves.slice(0, 4)
+      : setup.p2.selectedMoves;
 
-    setSetup((prev) => {
-      if (prev.p1.selectedPokemon?.name !== pokemonName) return prev;
-      if (prev.p1.selectedMoves.length > 0) return prev;
-      return {
-        ...prev,
-        p1: {
-          ...prev.p1,
-          selectedMoves: recommended.slice(0, 4),
-          autoMoves: false,
-        },
-      };
-    });
-  }, [p1MovesQuery.data, setup.p1.selectedPokemon?.name, setup.p1.selectedMoves.length]);
-
-  useEffect(() => {
-    const pokemonName = setup.p2.selectedPokemon?.name;
-    const recommended = p2MovesQuery.data?.recommendedMoves ?? [];
-    if (!pokemonName || recommended.length === 0) return;
-    if (setup.p2.selectedMoves.length > 0) return;
-
-    setSetup((prev) => {
-      if (prev.p2.selectedPokemon?.name !== pokemonName) return prev;
-      if (prev.p2.selectedMoves.length > 0) return prev;
-      return {
-        ...prev,
-        p2: {
-          ...prev.p2,
-          selectedMoves: recommended.slice(0, 4),
-          autoMoves: false,
-        },
-      };
-    });
-  }, [p2MovesQuery.data, setup.p2.selectedPokemon?.name, setup.p2.selectedMoves.length]);
+  const p1ResolvedAutoMoves = setup.p1.autoMoves && p1ResolvedSelectedMoves.length === 0;
+  const p2ResolvedAutoMoves = setup.p2.autoMoves && p2ResolvedSelectedMoves.length === 0;
 
   const startBattleMutation = useMutation({
     mutationFn: async () => {
       const body = {
         p1Pokemon: setup.p1.selectedPokemon?.name,
         p2Pokemon: setup.p2.selectedPokemon?.name,
-        p1Moves: setup.p1.autoMoves ? undefined : setup.p1.selectedMoves,
-        p2Moves: setup.p2.autoMoves ? undefined : setup.p2.selectedMoves,
+        p1Moves: p1ResolvedAutoMoves ? undefined : p1ResolvedSelectedMoves,
+        p2Moves: p2ResolvedAutoMoves ? undefined : p2ResolvedSelectedMoves,
         level: setup.level,
         formatid: setup.formatid,
       };
@@ -894,7 +868,7 @@ export function InteractiveBattle() {
         await sleep(CPU_MOVE_DELAY_MS);
 
         const cpuMoveCount =
-          (setup.p2.autoMoves ? 4 : Math.max(1, setup.p2.selectedMoves.length)) || 4;
+          (p2ResolvedAutoMoves ? 4 : Math.max(1, p2ResolvedSelectedMoves.length)) || 4;
         const cpuMoveIndex = Math.floor(Math.random() * cpuMoveCount) + 1;
 
         try {
