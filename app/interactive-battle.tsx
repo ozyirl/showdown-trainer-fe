@@ -59,6 +59,14 @@ type PokemonDetails = {
 
 type MoveOption = {
   name: string;
+  type?: string | null;
+  basePower?: number | null;
+  category?: string | null;
+};
+
+type PokemonMovesResponse = {
+  moves: MoveOption[];
+  recommendedMoves: string[];
 };
 
 type SideKey = "p1" | "p2";
@@ -138,7 +146,7 @@ function normalizePokemonDetails(payload: unknown): PokemonDetails | null {
   };
 }
 
-function normalizeMoveList(payload: unknown): MoveOption[] {
+function normalizeMovePayload(payload: unknown): PokemonMovesResponse {
   const rawList = Array.isArray(payload)
     ? payload
     : Array.isArray((payload as { moves?: unknown[] })?.moves)
@@ -146,19 +154,53 @@ function normalizeMoveList(payload: unknown): MoveOption[] {
     : Array.isArray((payload as { data?: unknown[] })?.data)
     ? (payload as { data: unknown[] }).data
     : [];
+  const rawRecommended = Array.isArray(
+    (payload as { recommendedMoves?: unknown[] })?.recommendedMoves
+  )
+    ? (payload as { recommendedMoves: unknown[] }).recommendedMoves
+    : [];
 
   const normalized: MoveOption[] = [];
+  const recommendedMoves: string[] = [];
+  const seen = new Set<string>();
+
+  for (const item of rawRecommended) {
+    const name = String(item ?? "").trim();
+    if (!name || recommendedMoves.includes(name)) continue;
+    recommendedMoves.push(name);
+    if (recommendedMoves.length >= 4) break;
+  }
+
   for (const item of rawList) {
     if (typeof item === "string") {
-      if (item.trim()) normalized.push({ name: item });
+      const name = item.trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      normalized.push({ name });
       continue;
     }
-      const data = item as Record<string, unknown>;
-      const name = String(data.name ?? data.id ?? "").trim();
-      if (!name) continue;
-      normalized.push({ name });
+    const data = item as Record<string, unknown>;
+    const name = String(data.name ?? data.id ?? "").trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    normalized.push({
+      name,
+      type: data.type ? String(data.type) : null,
+      basePower:
+        typeof data.basePower === "number"
+          ? data.basePower
+          : typeof data.power === "number"
+          ? data.power
+          : null,
+      category: data.category ? String(data.category) : null,
+    });
   }
-  return normalized;
+
+  if (recommendedMoves.length === 0) {
+    for (const move of normalized.slice(0, 4)) recommendedMoves.push(move.name);
+  }
+
+  return { moves: normalized, recommendedMoves };
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -260,6 +302,7 @@ function typeChipText(types: string[]) {
 function MoveSelector(params: {
   title: string;
   moveOptions: MoveOption[];
+  recommendedMoves: string[];
   isLoading: boolean;
   selectedMoves: string[];
   autoMoves: boolean;
@@ -270,6 +313,7 @@ function MoveSelector(params: {
   const {
     title,
     moveOptions,
+    recommendedMoves,
     isLoading,
     selectedMoves,
     autoMoves,
@@ -334,8 +378,21 @@ function MoveSelector(params: {
                     : "border-white/5 bg-transparent text-white/75 hover:border-white/15 hover:bg-white/[0.03]"
                 } disabled:cursor-not-allowed disabled:opacity-40`}
               >
-                <span>{move.name}</span>
-                <span className="text-xs text-white/45">{selected ? "Selected" : "Add"}</span>
+                <div className="min-w-0">
+                  <div>{move.name}</div>
+                  <div className="text-xs text-white/40">
+                    {move.type ?? "Unknown"}
+                    {typeof move.basePower === "number" ? ` • BP ${move.basePower}` : ""}
+                    {move.category ? ` • ${move.category}` : ""}
+                  </div>
+                </div>
+                <span className="text-xs text-white/45">
+                  {selected
+                    ? "Selected"
+                    : recommendedMoves.includes(move.name)
+                    ? "Recommended"
+                    : "Add"}
+                </span>
               </button>
             );
           })}
@@ -364,6 +421,7 @@ function PokemonSetupPanel(params: {
   searchError: string | null;
   details: PokemonDetails | null;
   moves: MoveOption[];
+  recommendedMoves: string[];
   movesLoading: boolean;
 }) {
   const {
@@ -380,6 +438,7 @@ function PokemonSetupPanel(params: {
     searchError,
     details,
     moves,
+    recommendedMoves,
     movesLoading,
   } = params;
 
@@ -458,6 +517,7 @@ function PokemonSetupPanel(params: {
           <MoveSelector
             title={`${setup.selectedPokemon.name} Moves`}
             moveOptions={moves}
+            recommendedMoves={recommendedMoves}
             isLoading={movesLoading}
             selectedMoves={setup.selectedMoves}
             autoMoves={setup.autoMoves}
@@ -695,7 +755,7 @@ export function InteractiveBattle() {
           setup.p1.selectedPokemon!.name
         )}/moves?limit=120`
       );
-      return normalizeMoveList(payload);
+      return normalizeMovePayload(payload);
     },
     enabled: !!setup.p1.selectedPokemon?.name,
     refetchOnWindowFocus: false,
@@ -709,7 +769,7 @@ export function InteractiveBattle() {
           setup.p2.selectedPokemon!.name
         )}/moves?limit=120`
       );
-      return normalizeMoveList(payload);
+      return normalizeMovePayload(payload);
     },
     enabled: !!setup.p2.selectedPokemon?.name,
     refetchOnWindowFocus: false,
@@ -737,10 +797,44 @@ export function InteractiveBattle() {
   const liveBattleState = stateQuery.data ?? battleStateSnapshot;
 
   useEffect(() => {
-    if (stateQuery.data) {
-      setBattleStateSnapshot(stateQuery.data);
-    }
-  }, [stateQuery.data]);
+    const pokemonName = setup.p1.selectedPokemon?.name;
+    const recommended = p1MovesQuery.data?.recommendedMoves ?? [];
+    if (!pokemonName || recommended.length === 0) return;
+    if (setup.p1.selectedMoves.length > 0) return;
+
+    setSetup((prev) => {
+      if (prev.p1.selectedPokemon?.name !== pokemonName) return prev;
+      if (prev.p1.selectedMoves.length > 0) return prev;
+      return {
+        ...prev,
+        p1: {
+          ...prev.p1,
+          selectedMoves: recommended.slice(0, 4),
+          autoMoves: false,
+        },
+      };
+    });
+  }, [p1MovesQuery.data, setup.p1.selectedPokemon?.name, setup.p1.selectedMoves.length]);
+
+  useEffect(() => {
+    const pokemonName = setup.p2.selectedPokemon?.name;
+    const recommended = p2MovesQuery.data?.recommendedMoves ?? [];
+    if (!pokemonName || recommended.length === 0) return;
+    if (setup.p2.selectedMoves.length > 0) return;
+
+    setSetup((prev) => {
+      if (prev.p2.selectedPokemon?.name !== pokemonName) return prev;
+      if (prev.p2.selectedMoves.length > 0) return prev;
+      return {
+        ...prev,
+        p2: {
+          ...prev.p2,
+          selectedMoves: recommended.slice(0, 4),
+          autoMoves: false,
+        },
+      };
+    });
+  }, [p2MovesQuery.data, setup.p2.selectedPokemon?.name, setup.p2.selectedMoves.length]);
 
   const startBattleMutation = useMutation({
     mutationFn: async () => {
@@ -960,7 +1054,8 @@ export function InteractiveBattle() {
           searchLoading={p1SearchQuery.isFetching}
           searchError={p1SearchQuery.error ? (p1SearchQuery.error as Error).message : null}
           details={p1DetailsQuery.data ?? null}
-          moves={p1MovesQuery.data ?? []}
+          moves={p1MovesQuery.data?.moves ?? []}
+          recommendedMoves={p1MovesQuery.data?.recommendedMoves ?? []}
           movesLoading={p1MovesQuery.isFetching}
         />
 
@@ -985,7 +1080,8 @@ export function InteractiveBattle() {
           searchLoading={p2SearchQuery.isFetching}
           searchError={p2SearchQuery.error ? (p2SearchQuery.error as Error).message : null}
           details={p2DetailsQuery.data ?? null}
-          moves={p2MovesQuery.data ?? []}
+          moves={p2MovesQuery.data?.moves ?? []}
+          recommendedMoves={p2MovesQuery.data?.recommendedMoves ?? []}
           movesLoading={p2MovesQuery.isFetching}
         />
       </div>
