@@ -1,585 +1,1038 @@
 "use client";
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useState } from "react";
 
 const API_URL = "http://localhost:5200/api";
-const CPU_RESPONSE_DELAY_MS = 700;
-const ACTION_ANIMATION_DELAY_MS = 650;
-
-const sleep = (ms: number) =>
-  new Promise((resolve) => setTimeout(resolve, ms));
+const SEARCH_DEBOUNCE_MS = 300;
+const CPU_MOVE_DELAY_MS = 650;
 
 type MoveAcceptedAction = {
-  player: string;
+  player: "p1" | "p2";
   moveIndex: number;
   moveName: string;
-  acceptedAt: string;
+  acceptedAt?: string;
 };
 
-interface BattleState {
+type BattlePokemonState = {
+  name: string;
+  hp: number;
+  maxHp: number;
+  status: string | null;
+};
+
+type BattleMove = {
+  name: string;
+  type: string;
+  power: number | null;
+  pp: number;
+  maxPp: number;
+};
+
+type BattleState = {
   battleId: string;
-  p1Pokemon: {
-    name: string;
-    hp: number;
-    maxHp: number;
-    status: string | null;
-  };
-  p2Pokemon: {
-    name: string;
-    hp: number;
-    maxHp: number;
-    status: string | null;
-  };
-  availableMoves: {
-    name: string;
-    type: string;
-    power: number | null;
-    pp: number;
-    maxPp: number;
-  }[];
-  turnLog: Array<
-    | string
-    | {
-        player: string;
-        moveIndex: number;
-        moveName: string;
-        acceptedAt: string;
-      }
-  >;
+  p1Pokemon: BattlePokemonState;
+  p2Pokemon: BattlePokemonState;
+  availableMoves: BattleMove[];
+  turnLog: Array<string | MoveAcceptedAction>;
   isEnded: boolean;
   winner: string | null;
   currentTurn: number;
   waitingForMove: boolean;
-  phase?: string;
-  lastAction?:
-    | string
-    | MoveAcceptedAction
-    | null;
-}
+  phase?: "awaiting-moves" | "resolving" | "ended" | string;
+  pendingPlayers?: Array<"p1" | "p2"> | string[];
+  lastAction?: string | MoveAcceptedAction | null;
+};
 
-export function InteractiveBattle() {
-  const [battleId, setBattleId] = useState<string | null>(null);
-  const [gameLog, setGameLog] = useState<string[]>([]);
-  const [isTurnLocked, setIsTurnLocked] = useState(false);
-  const [pendingMoveName, setPendingMoveName] = useState<string | null>(null);
-  const [turnUiPhase, setTurnUiPhase] = useState<"idle" | "selected" | "cpu">(
-    "idle"
-  );
-  const [displayHp, setDisplayHp] = useState<{ p1: number; p2: number } | null>(
-    null
-  );
-  const [isTransitioning, startTransition] = useTransition();
-  const turnStartHpRef = useRef<{ p1: number; p2: number } | null>(null);
-  const processedTurnLogCountRef = useRef(0);
+type PokemonSearchItem = {
+  name: string;
+  types: string[];
+  tier?: string | null;
+};
 
-  const shouldSubmitCpuMove = (
-    stateAfterP1: BattleState | undefined,
-    turnBeforeSubmit: number | undefined
-  ) => {
-    if (!stateAfterP1 || stateAfterP1.isEnded) return false;
+type PokemonDetails = {
+  name: string;
+  types: string[];
+  tier?: string | null;
+  baseStats?: Record<string, number>;
+};
 
-    if (
-      typeof turnBeforeSubmit === "number" &&
-      stateAfterP1.currentTurn > turnBeforeSubmit
-    ) {
-      return false;
-    }
+type MoveOption = {
+  name: string;
+};
 
-    if (
-      stateAfterP1.lastAction &&
-      typeof stateAfterP1.lastAction === "object" &&
-      stateAfterP1.lastAction.player === "p2"
-    ) {
-      return false;
-    }
+type SideKey = "p1" | "p2";
 
-    if (stateAfterP1.phase) {
-      const phase = stateAfterP1.phase.toLowerCase();
-      if (
-        phase.includes("resolved") ||
-        phase.includes("complete") ||
-        phase.includes("result")
-      ) {
-        return false;
-      }
-    }
+type SideSetup = {
+  query: string;
+  selectedPokemon: PokemonSearchItem | null;
+  selectedMoves: string[];
+  autoMoves: boolean;
+};
 
-    return true;
-  };
+type BattleSetupState = {
+  p1: SideSetup;
+  p2: SideSetup;
+  level: number;
+  formatid: string;
+};
 
-  const getMoveOrder = (
-    stateBeforeTurn: BattleState | undefined,
-    turnEntries: BattleState["turnLog"]
-  ): Array<"p1" | "p2"> => {
-    const p1Name = stateBeforeTurn?.p1Pokemon.name?.toLowerCase();
-    const p2Name = stateBeforeTurn?.p2Pokemon.name?.toLowerCase();
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    const orderedPlayers: Array<"p1" | "p2"> = [];
+const panelClass =
+  "rounded-2xl border border-white/10 bg-white/[0.03] p-6 backdrop-blur";
 
-    for (const entry of turnEntries) {
-      if (typeof entry !== "string") continue;
-      const lower = entry.toLowerCase();
-      if (!lower.includes(" used ")) continue;
-
-      if (p1Name && lower.includes(p1Name) && !orderedPlayers.includes("p1")) {
-        orderedPlayers.push("p1");
-      } else if (
-        p2Name &&
-        lower.includes(p2Name) &&
-        !orderedPlayers.includes("p2")
-      ) {
-        orderedPlayers.push("p2");
-      }
-
-      if (orderedPlayers.length === 2) break;
-    }
-
-    if (orderedPlayers.length === 2) return orderedPlayers;
-    if (orderedPlayers.length === 1) {
-      return orderedPlayers[0] === "p1" ? ["p1", "p2"] : ["p2", "p1"];
-    }
-
-    return ["p1", "p2"];
-  };
-
-  const animateTurnHp = async (
-    stateBeforeTurn: BattleState | undefined,
-    resolvedState: BattleState,
-    turnEntries: BattleState["turnLog"]
-  ) => {
-    const startHp = turnStartHpRef.current ?? {
-      p1: stateBeforeTurn?.p1Pokemon.hp ?? resolvedState.p1Pokemon.hp,
-      p2: stateBeforeTurn?.p2Pokemon.hp ?? resolvedState.p2Pokemon.hp,
-    };
-    const finalHp = {
-      p1: resolvedState.p1Pokemon.hp,
-      p2: resolvedState.p2Pokemon.hp,
-    };
-
-    setDisplayHp(startHp);
-
-    const order = getMoveOrder(stateBeforeTurn, turnEntries);
-    let currentHp = { ...startHp };
-    let didAnimate = false;
-
-    for (const attacker of order) {
-      const defender = attacker === "p1" ? "p2" : "p1";
-      if (currentHp[defender] === finalHp[defender]) continue;
-
-      didAnimate = true;
-      currentHp = { ...currentHp, [defender]: finalHp[defender] };
-      setDisplayHp(currentHp);
-      await sleep(ACTION_ANIMATION_DELAY_MS);
-    }
-
-    if (!didAnimate && (currentHp.p1 !== finalHp.p1 || currentHp.p2 !== finalHp.p2)) {
-      setDisplayHp(finalHp);
-      await sleep(Math.floor(ACTION_ANIMATION_DELAY_MS / 2));
-    } else {
-      setDisplayHp(finalHp);
-    }
-  };
-
-  const getNewTurnLogEntries = (turnLog: BattleState["turnLog"]) => {
-    const processedCount = processedTurnLogCountRef.current;
-
-    if (processedCount <= 0) return turnLog;
-    if (turnLog.length < processedCount) return turnLog;
-
-    return turnLog.slice(processedCount);
-  };
-
-  // Start new battle
-  const startBattle = useMutation({
-    mutationFn: async () => {
-      const response = await fetch(`${API_URL}/battle/start`, {
-        method: "POST",
-      });
-      if (!response.ok) throw new Error("Failed to start battle");
-      return response.json() as Promise<BattleState>;
-    },
-    onSuccess: (data) => {
-      setBattleId(data.battleId);
-      setGameLog(["Battle started!", ""]);
-      processedTurnLogCountRef.current = 0;
-      setDisplayHp({
-        p1: data.p1Pokemon.hp,
-        p2: data.p2Pokemon.hp,
-      });
-    },
-  });
-
-  // Get battle state
-  const { data: battleState, refetch: refetchState } = useQuery<BattleState>({
-    queryKey: ["battle-state", battleId],
-    queryFn: async () => {
-      if (!battleId) throw new Error("No battle ID");
-      const response = await fetch(`${API_URL}/battle/${battleId}/state`);
-      if (!response.ok) throw new Error("Failed to fetch battle state");
-      return response.json();
-    },
-    enabled: !!battleId,
-    refetchInterval: (query) => {
-      return query.state.data?.isEnded ? false : 2000;
-    },
-  });
-
-  // Submit move
-  const submitMove = useMutation({
-    mutationFn: async ({
-      moveIndex,
-    }: {
-      moveIndex: number;
-      moveName: string;
-    }) => {
-      if (!battleId) throw new Error("No battle ID");
-      const turnBeforeSubmit = battleState?.currentTurn;
-
-      const p1Response = await fetch(`${API_URL}/battle/${battleId}/move`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ player: "p1", moveIndex }),
-      });
-      if (!p1Response.ok) throw new Error("Failed to submit p1 move");
-
-      setTurnUiPhase("cpu");
-      const stateAfterP1Result = await refetchState();
-      const stateAfterP1 = stateAfterP1Result.data;
-      await sleep(CPU_RESPONSE_DELAY_MS);
-
-      const latestBeforeCpuResult = await refetchState();
-      const latestBeforeCpu = latestBeforeCpuResult.data ?? stateAfterP1;
-
-      if (!shouldSubmitCpuMove(latestBeforeCpu, turnBeforeSubmit)) {
-        if (latestBeforeCpu) return latestBeforeCpu;
-        const latest = await refetchState();
-        if (latest.data) return latest.data;
-        throw new Error("Failed to fetch updated battle state");
-      }
-
-      const randomMove = Math.floor(Math.random() * 4) + 1;
-      const p2Response = await fetch(`${API_URL}/battle/${battleId}/move`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ player: "p2", moveIndex: randomMove }),
-      });
-      if (!p2Response.ok) {
-        if (p2Response.status === 400) {
-          const latest = await refetchState();
-          if (latest.data) return latest.data;
-          if (latestBeforeCpu) return latestBeforeCpu;
-          if (stateAfterP1) return stateAfterP1;
-        }
-        throw new Error("Failed to submit p2 move");
-      }
-
-      return p2Response.json() as Promise<BattleState>;
-    },
-    onMutate: ({ moveName }) => {
-      setIsTurnLocked(true);
-      setPendingMoveName(moveName);
-      setTurnUiPhase("selected");
-      turnStartHpRef.current = battleState
-        ? {
-            p1: battleState.p1Pokemon.hp,
-            p2: battleState.p2Pokemon.hp,
-          }
-        : null;
-    },
-    onSuccess: async (data) => {
-      try {
-        const newTurnEntries = getNewTurnLogEntries(data.turnLog);
-        await animateTurnHp(battleState, data, newTurnEntries);
-        if (newTurnEntries.length > 0) {
-          const normalizedLog = newTurnEntries.map(formatTurnLogEntry);
-          startTransition(() => {
-            setGameLog((prev) => [...prev, ...normalizedLog, ""]);
-          });
-        }
-        processedTurnLogCountRef.current = data.turnLog.length;
-        await refetchState();
-      } finally {
-        startTransition(() => {
-          setIsTurnLocked(false);
-          setPendingMoveName(null);
-          setTurnUiPhase("idle");
-        });
-        turnStartHpRef.current = null;
-      }
-    },
-    onError: () => {
-      setIsTurnLocked(false);
-      setPendingMoveName(null);
-      setTurnUiPhase("idle");
-      turnStartHpRef.current = null;
-    },
-  });
-
-  const getHPPercentage = (hp: number, maxHp: number) => {
-    return Math.max(0, (hp / maxHp) * 100);
-  };
-
-  const getHPColor = (percentage: number) => {
-    if (percentage > 50) return "bg-green-500";
-    if (percentage > 25) return "bg-yellow-500";
-    return "bg-red-500";
-  };
-
-  const getTypeColor = (type: string) => {
-    const colors: Record<string, string> = {
-      Fire: "bg-orange-500",
-      Water: "bg-blue-500",
-      Grass: "bg-green-500",
-      Electric: "bg-yellow-400",
-      Psychic: "bg-pink-500",
-      Ghost: "bg-purple-600",
-      Poison: "bg-purple-500",
-      Dragon: "bg-indigo-600",
-      Dark: "bg-gray-800",
-      Flying: "bg-blue-300",
-      Normal: "bg-gray-400",
-    };
-    return colors[type] || "bg-gray-500";
-  };
-
-  const formatTurnLogEntry = (
-    entry: BattleState["turnLog"][number]
-  ): string => {
-    if (typeof entry === "string") return entry;
-    const playerLabel = entry.player === "p1" ? "You" : "Opponent";
-    return `${playerLabel} used ${entry.moveName} (move ${entry.moveIndex}).`;
-  };
-
-  const isMoveLocked = submitMove.isPending || isTurnLocked || isTransitioning;
+function useDebouncedValue<T>(value: T, delayMs: number) {
+  const [debounced, setDebounced] = useState(value);
 
   useEffect(() => {
-    if (!battleState || isMoveLocked) return;
-    setDisplayHp({
-      p1: battleState.p1Pokemon.hp,
-      p2: battleState.p2Pokemon.hp,
-    });
-  }, [battleState, isMoveLocked]);
+    const timeout = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timeout);
+  }, [value, delayMs]);
 
-  if (!battleId) {
-    return (
-      <div className="flex flex-col items-center justify-center py-12">
-        <h2 className="text-3xl font-bold text-white mb-6">
-          Interactive Battle
-        </h2>
-        <button
-          onClick={() => startBattle.mutate()}
-          disabled={startBattle.isPending}
-          className="px-8 py-4 bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600 text-white font-bold rounded-xl text-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
-        >
-          {startBattle.isPending ? "⚔️ Starting..." : "🎮 Start Battle!"}
-        </button>
-      </div>
-    );
+  return debounced;
+}
+
+function normalizePokemonList(payload: unknown): PokemonSearchItem[] {
+  const rawList = Array.isArray(payload)
+    ? payload
+    : Array.isArray((payload as { results?: unknown[] })?.results)
+    ? (payload as { results: unknown[] }).results
+    : Array.isArray((payload as { pokemon?: unknown[] })?.pokemon)
+    ? (payload as { pokemon: unknown[] }).pokemon
+    : [];
+
+  const normalized: PokemonSearchItem[] = [];
+  for (const item of rawList) {
+      const data = item as Record<string, unknown>;
+      const rawTypes = Array.isArray(data.types) ? data.types : [];
+      const types = rawTypes.map((t) => String(t)).filter(Boolean);
+      const name = String(data.name ?? "").trim();
+      if (!name) continue;
+
+      normalized.push({
+        name,
+        types,
+        tier: data.tier ? String(data.tier) : null,
+      });
   }
+  return normalized;
+}
 
-  if (!battleState) {
-    return (
-      <div className="text-center py-12">
-        <div className="inline-block animate-spin text-6xl mb-4">⚔️</div>
-        <div className="text-white text-xl">Loading battle...</div>
-      </div>
-    );
-  }
+function normalizePokemonDetails(payload: unknown): PokemonDetails | null {
+  if (!payload || typeof payload !== "object") return null;
+  const data = payload as Record<string, unknown>;
+  const name = String(data.name ?? "").trim();
+  if (!name) return null;
 
-  const formatLastAction = (lastAction: BattleState["lastAction"]) => {
-    if (!lastAction) return null;
-    if (typeof lastAction === "string") return lastAction;
-    return formatTurnLogEntry(lastAction);
+  return {
+    name,
+    types: Array.isArray(data.types)
+      ? data.types.map((type) => String(type)).filter(Boolean)
+      : [],
+    tier: data.tier ? String(data.tier) : null,
+    baseStats:
+      data.baseStats && typeof data.baseStats === "object"
+        ? (data.baseStats as Record<string, number>)
+        : undefined,
   };
-  const canSubmitPlayerMove =
-    !isMoveLocked &&
-    battleState.waitingForMove &&
-    !battleState.isEnded;
-  const turnStatusText =
-    turnUiPhase === "selected" && pendingMoveName
-      ? `${pendingMoveName} selected...`
-      : turnUiPhase === "cpu"
-      ? "Opponent is responding..."
-      : formatLastAction(battleState.lastAction);
+}
+
+function normalizeMoveList(payload: unknown): MoveOption[] {
+  const rawList = Array.isArray(payload)
+    ? payload
+    : Array.isArray((payload as { moves?: unknown[] })?.moves)
+    ? (payload as { moves: unknown[] }).moves
+    : Array.isArray((payload as { data?: unknown[] })?.data)
+    ? (payload as { data: unknown[] }).data
+    : [];
+
+  const normalized: MoveOption[] = [];
+  for (const item of rawList) {
+    if (typeof item === "string") {
+      if (item.trim()) normalized.push({ name: item });
+      continue;
+    }
+      const data = item as Record<string, unknown>;
+      const name = String(data.name ?? data.id ?? "").trim();
+      if (!name) continue;
+      normalized.push({ name });
+  }
+  return normalized;
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(body || `Request failed (${response.status})`);
+  }
+  return response.json() as Promise<T>;
+}
+
+async function fetchBattleState(battleId: string): Promise<BattleState> {
+  return fetchJson<BattleState>(`${API_URL}/battle/${battleId}/state`);
+}
+
+async function postBattleMove(params: {
+  battleId: string;
+  player: "p1" | "p2";
+  moveIndex: number;
+}) {
+  const response = await fetch(`${API_URL}/battle/${params.battleId}/move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ player: params.player, moveIndex: params.moveIndex }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    const error = new Error(body || `Move submit failed (${response.status})`);
+    (error as Error & { status?: number }).status = response.status;
+    throw error;
+  }
+
+  return response.json() as Promise<BattleState>;
+}
+
+function formatTurnLogEntry(entry: BattleState["turnLog"][number]) {
+  if (typeof entry === "string") return entry;
+  const actor = entry.player === "p1" ? "You" : "Opponent";
+  return `${actor} selected ${entry.moveName} (#${entry.moveIndex}).`;
+}
+
+function formatLastAction(lastAction: BattleState["lastAction"]) {
+  if (!lastAction) return null;
+  if (typeof lastAction === "string") return lastAction;
+  return formatTurnLogEntry(lastAction);
+}
+
+function canPlayerAct(state: BattleState | null, isSubmitting: boolean) {
+  if (!state || isSubmitting || state.isEnded || state.phase === "ended") return false;
+  if (Array.isArray(state.pendingPlayers) && state.pendingPlayers.length > 0) {
+    return state.pendingPlayers.includes("p1");
+  }
+  return state.waitingForMove;
+}
+
+function sideNeedsMove(state: BattleState | null, player: "p1" | "p2") {
+  if (!state || state.isEnded || state.phase === "ended") return false;
+  if (Array.isArray(state.pendingPlayers)) return state.pendingPlayers.includes(player);
+  if (player === "p1") return state.waitingForMove;
+  return false;
+}
+
+function deriveStatusText(params: {
+  state: BattleState | null;
+  pendingMoveName: string | null;
+  isSubmitting: boolean;
+  errorMessage: string | null;
+}) {
+  const { state, pendingMoveName, isSubmitting, errorMessage } = params;
+
+  if (errorMessage) return `Error: ${errorMessage}`;
+  if (!state) return "Loading battle state...";
+  if (state.isEnded || state.phase === "ended") {
+    return state.winner ? `${state.winner} wins.` : "Battle ended.";
+  }
+  if (isSubmitting && pendingMoveName) return `Move selected: ${pendingMoveName}`;
+  if (state.phase === "resolving") return "Resolving turn...";
+  if (sideNeedsMove(state, "p2")) return "Waiting for opponent...";
+  if (sideNeedsMove(state, "p1")) return "Choose your move.";
+  return formatLastAction(state.lastAction) ?? "Battle in progress...";
+}
+
+function getHpBarClass(percentage: number) {
+  if (percentage > 50) return "bg-white/80";
+  if (percentage > 25) return "bg-white/55";
+  return "bg-white/35";
+}
+
+function hpPercent(hp: number, maxHp: number) {
+  if (maxHp <= 0) return 0;
+  return Math.max(0, Math.min(100, (hp / maxHp) * 100));
+}
+
+function typeChipText(types: string[]) {
+  return types.length ? types.join(" / ") : "Unknown type";
+}
+
+function MoveSelector(params: {
+  title: string;
+  moveOptions: MoveOption[];
+  isLoading: boolean;
+  selectedMoves: string[];
+  autoMoves: boolean;
+  onToggleMove: (moveName: string) => void;
+  onClearMoves: () => void;
+  onSetAutoMoves: (value: boolean) => void;
+}) {
+  const {
+    title,
+    moveOptions,
+    isLoading,
+    selectedMoves,
+    autoMoves,
+    onToggleMove,
+    onClearMoves,
+    onSetAutoMoves,
+  } = params;
 
   return (
-    <div className="space-y-6">
-      {/* Battle Result */}
-      {battleState.isEnded && (
-        <div className="bg-gradient-to-r from-yellow-500/20 to-orange-500/20 border border-yellow-500/50 rounded-xl p-6">
-          <div className="text-center">
-            <div className="text-4xl font-bold text-white mb-2">
-              {battleState.winner} Wins!
-            </div>
-            <button
-              onClick={() => {
-                setBattleId(null);
-                setGameLog([]);
-                processedTurnLogCountRef.current = 0;
-                startBattle.mutate();
-              }}
-              className="mt-4 px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-bold rounded-lg transition-all"
-            >
-              🔄 New Battle
-            </button>
+    <div className="space-y-3 rounded-xl border border-white/10 bg-black/30 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-sm font-medium text-white/80">{title}</div>
+          <div className="text-xs text-white/45">
+            Select up to 4 moves or use auto-pick
           </div>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => onSetAutoMoves(true)}
+            className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${
+              autoMoves
+                ? "border-white/20 bg-white text-black"
+                : "border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.06]"
+            }`}
+          >
+            Auto-select moves
+          </button>
+          <button
+            type="button"
+            onClick={onClearMoves}
+            className="rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs text-white/70 transition-colors hover:bg-white/[0.06]"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+
+      {!autoMoves && (
+        <div className="rounded-lg border border-white/10 bg-black/40 p-2 text-xs text-white/60">
+          Selected ({selectedMoves.length}/4): {selectedMoves.length ? selectedMoves.join(", ") : "none"}
         </div>
       )}
 
-      {/* Pokemon Display */}
-      <div className="grid md:grid-cols-2 gap-6">
-        {/* Player 1 Pokemon */}
-        <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
-          <div className="text-center mb-4">
-            <div className="text-lg font-semibold text-purple-300">
-              Your Pokemon
-            </div>
-          </div>
-          <div className="flex flex-col items-center gap-4">
-            <img
-              src={`https://play.pokemonshowdown.com/sprites/gen5ani/${battleState.p1Pokemon.name.toLowerCase()}.gif`}
-              alt={battleState.p1Pokemon.name}
-              className="w-32 h-32 object-contain"
-              onError={(e) => {
-                e.currentTarget.src = `https://play.pokemonshowdown.com/sprites/gen5/${battleState.p1Pokemon.name.toLowerCase()}.png`;
-              }}
-            />
-            <div className="text-2xl font-bold text-white">
-              {battleState.p1Pokemon.name}
-            </div>
-            {/* HP Bar */}
-            <div className="w-full">
-              <div className="flex justify-between text-sm text-white mb-1">
-                <span>HP</span>
-                <span>
-                  {displayHp?.p1 ?? battleState.p1Pokemon.hp}/
-                  {battleState.p1Pokemon.maxHp}
-                </span>
-              </div>
-              <div className="w-full bg-gray-700 rounded-full h-4">
-                <div
-                  className={`h-4 rounded-full transition-all duration-500 ${getHPColor(
-                    getHPPercentage(
-                      displayHp?.p1 ?? battleState.p1Pokemon.hp,
-                      battleState.p1Pokemon.maxHp
-                    )
-                  )}`}
-                  style={{
-                    width: `${getHPPercentage(
-                      displayHp?.p1 ?? battleState.p1Pokemon.hp,
-                      battleState.p1Pokemon.maxHp
-                    )}%`,
-                  }}
-                ></div>
-              </div>
-            </div>
-          </div>
-        </div>
+      {isLoading && <div className="text-sm text-white/55">Loading move list...</div>}
 
-        {/* Player 2 Pokemon */}
-        <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
-          <div className="text-center mb-4">
-            <div className="text-lg font-semibold text-orange-300">
-              Opponent Pokemon
-            </div>
-          </div>
-          <div className="flex flex-col items-center gap-4">
-            <img
-              src={`https://play.pokemonshowdown.com/sprites/gen5ani/${battleState.p2Pokemon.name.toLowerCase()}.gif`}
-              alt={battleState.p2Pokemon.name}
-              className="w-32 h-32 object-contain"
-              onError={(e) => {
-                e.currentTarget.src = `https://play.pokemonshowdown.com/sprites/gen5/${battleState.p2Pokemon.name.toLowerCase()}.png`;
-              }}
-            />
-            <div className="text-2xl font-bold text-white">
-              {battleState.p2Pokemon.name}
-            </div>
-            {/* HP Bar */}
-            <div className="w-full">
-              <div className="flex justify-between text-sm text-white mb-1">
-                <span>HP</span>
-                <span>
-                  {displayHp?.p2 ?? battleState.p2Pokemon.hp}/
-                  {battleState.p2Pokemon.maxHp}
-                </span>
-              </div>
-              <div className="w-full bg-gray-700 rounded-full h-4">
-                <div
-                  className={`h-4 rounded-full transition-all duration-500 ${getHPColor(
-                    getHPPercentage(
-                      displayHp?.p2 ?? battleState.p2Pokemon.hp,
-                      battleState.p2Pokemon.maxHp
-                    )
-                  )}`}
-                  style={{
-                    width: `${getHPPercentage(
-                      displayHp?.p2 ?? battleState.p2Pokemon.hp,
-                      battleState.p2Pokemon.maxHp
-                    )}%`,
-                  }}
-                ></div>
-              </div>
-            </div>
-          </div>
+      {!isLoading && !autoMoves && moveOptions.length > 0 && (
+        <div className="max-h-56 space-y-1 overflow-y-auto rounded-lg border border-white/10 bg-black/40 p-2">
+          {moveOptions.map((move) => {
+            const selected = selectedMoves.includes(move.name);
+            const disabled = !selected && selectedMoves.length >= 4;
+            return (
+              <button
+                key={move.name}
+                type="button"
+                onClick={() => onToggleMove(move.name)}
+                disabled={disabled}
+                className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors ${
+                  selected
+                    ? "border-white/20 bg-white/10 text-white"
+                    : "border-white/5 bg-transparent text-white/75 hover:border-white/15 hover:bg-white/[0.03]"
+                } disabled:cursor-not-allowed disabled:opacity-40`}
+              >
+                <span>{move.name}</span>
+                <span className="text-xs text-white/45">{selected ? "Selected" : "Add"}</span>
+              </button>
+            );
+          })}
         </div>
+      )}
+
+      {!isLoading && !autoMoves && moveOptions.length === 0 && (
+        <div className="text-sm text-white/55">No moves found for this Pokémon.</div>
+      )}
+    </div>
+  );
+}
+
+function PokemonSetupPanel(params: {
+  side: SideKey;
+  label: string;
+  setup: SideSetup;
+  onQueryChange: (value: string) => void;
+  onSelectPokemon: (pokemon: PokemonSearchItem) => void;
+  onClearPokemon: () => void;
+  onToggleMove: (moveName: string) => void;
+  onClearMoves: () => void;
+  onSetAutoMoves: (value: boolean) => void;
+  searchResults: PokemonSearchItem[];
+  searchLoading: boolean;
+  searchError: string | null;
+  details: PokemonDetails | null;
+  moves: MoveOption[];
+  movesLoading: boolean;
+}) {
+  const {
+    label,
+    setup,
+    onQueryChange,
+    onSelectPokemon,
+    onClearPokemon,
+    onToggleMove,
+    onClearMoves,
+    onSetAutoMoves,
+    searchResults,
+    searchLoading,
+    searchError,
+    details,
+    moves,
+    movesLoading,
+  } = params;
+
+  return (
+    <div className={`${panelClass} space-y-4`}>
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-base font-semibold text-white">{label}</h3>
+          <p className="text-xs text-white/45">Search a Pokémon and optionally pick moves</p>
+        </div>
+        {setup.selectedPokemon && (
+          <button
+            type="button"
+            onClick={onClearPokemon}
+            className="rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs text-white/70 hover:bg-white/[0.06]"
+          >
+            Clear Pokémon
+          </button>
+        )}
       </div>
 
-      {/* Move Selection */}
-      {!battleState.isEnded && (
-        <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
-          <h3 className="text-xl font-bold text-white mb-4">
-            🎯 Choose Your Move
-          </h3>
-          <div className="grid grid-cols-2 gap-4">
-            {battleState.availableMoves.map((move, index) => (
-              <button
-                key={index}
-                onClick={() =>
-                  submitMove.mutate({ moveIndex: index + 1, moveName: move.name })
-                }
-                disabled={!canSubmitPlayerMove}
-                className={`${getTypeColor(
-                  move.type
-                )} hover:opacity-80 text-white font-bold py-4 px-6 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg`}
-              >
-                <div className="text-left">
-                  <div className="text-lg">{move.name}</div>
-                  <div className="text-sm opacity-80">
-                    Type: {move.type}{" "}
-                    {move.power ? `• Power: ${move.power}` : ""}
+      <div className="space-y-2">
+        <label className="text-xs font-medium text-white/55">Pokémon search</label>
+        <input
+          value={setup.query}
+          onChange={(e) => onQueryChange(e.target.value)}
+          placeholder="Search Pokémon (e.g. Garchomp, Rotom)"
+          className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
+        />
+      </div>
+
+      {!!setup.query.trim() && (
+        <div className="space-y-2">
+          {searchLoading && <div className="text-xs text-white/50">Searching...</div>}
+          {searchError && <div className="text-xs text-white/50">{searchError}</div>}
+          {!searchLoading && !searchError && searchResults.length > 0 && (
+            <div className="max-h-52 space-y-1 overflow-y-auto rounded-lg border border-white/10 bg-black/40 p-2">
+              {searchResults.map((pokemon) => (
+                <button
+                  key={pokemon.name}
+                  type="button"
+                  onClick={() => onSelectPokemon(pokemon)}
+                  className="w-full rounded-md border border-white/5 px-3 py-2 text-left transition-colors hover:border-white/15 hover:bg-white/[0.03]"
+                >
+                  <div className="text-sm font-medium text-white">{pokemon.name}</div>
+                  <div className="text-xs text-white/45">
+                    {typeChipText(pokemon.types)}
+                    {pokemon.tier ? ` • ${pokemon.tier}` : ""}
                   </div>
-                  <div className="text-xs opacity-70">
-                    PP: {move.pp}/{move.maxPp}
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-          {turnStatusText && (
-            <div className="text-center mt-4 text-yellow-300 animate-pulse">
-              ⚔️ {turnStatusText}
+                </button>
+              ))}
             </div>
           )}
         </div>
       )}
 
-      {/* Battle Log */}
-      <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
-        <h3 className="text-xl font-bold text-white mb-4">📜 Battle Log</h3>
-        <div className="bg-black/40 rounded-lg p-4 max-h-64 overflow-y-auto">
-          <div className="font-mono text-sm text-green-300 space-y-1">
-            {gameLog.map((line, index) => (
-              <div key={index}>{line || "\u00A0"}</div>
+      {setup.selectedPokemon && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-white/10 bg-black/40 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium text-white">{setup.selectedPokemon.name}</div>
+                <div className="text-xs text-white/45">
+                  {typeChipText((details ?? setup.selectedPokemon).types)}
+                  {(details?.tier ?? setup.selectedPokemon.tier)
+                    ? ` • ${details?.tier ?? setup.selectedPokemon.tier}`
+                    : ""}
+                </div>
+              </div>
+              <div className="text-xs text-white/40">
+                {setup.autoMoves ? "Moves: auto" : `Moves: ${setup.selectedMoves.length}/4`}
+              </div>
+            </div>
+          </div>
+
+          <MoveSelector
+            title={`${setup.selectedPokemon.name} Moves`}
+            moveOptions={moves}
+            isLoading={movesLoading}
+            selectedMoves={setup.selectedMoves}
+            autoMoves={setup.autoMoves}
+            onToggleMove={onToggleMove}
+            onClearMoves={onClearMoves}
+            onSetAutoMoves={onSetAutoMoves}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BattleArena(params: {
+  battleState: BattleState;
+  statusText: string;
+  moveSubmitPending: boolean;
+  moveSubmitError: string | null;
+  onSubmitMove: (moveIndexOneBased: number, moveName: string) => void;
+  onLeaveBattle: () => void;
+}) {
+  const {
+    battleState,
+    statusText,
+    moveSubmitPending,
+    moveSubmitError,
+    onSubmitMove,
+    onLeaveBattle,
+  } = params;
+
+  const playerCanAct = canPlayerAct(battleState, moveSubmitPending);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4 backdrop-blur">
+        <div>
+          <div className="text-xs tracking-wide text-white/45">BATTLE</div>
+          <div className="text-sm text-white/80">
+            Turn {battleState.currentTurn} • {battleState.phase ?? "active"}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onLeaveBattle}
+          className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/75 hover:bg-white/[0.06]"
+        >
+          Back to Setup
+        </button>
+      </div>
+
+      {battleState.isEnded && (
+        <div className={`${panelClass} text-center`}>
+          <div className="text-xs tracking-[0.18em] text-white/40">RESULT</div>
+          <div className="mt-2 text-3xl font-semibold tracking-tight text-white">
+            {battleState.winner ?? "Battle"} Wins
+          </div>
+          <div className="mt-2 text-sm text-white/55">Battle complete.</div>
+        </div>
+      )}
+
+      <div className="grid gap-6 md:grid-cols-2">
+        {[{ label: "Your Pokémon", p: battleState.p1Pokemon }, { label: "Opponent", p: battleState.p2Pokemon }].map(
+          ({ label, p }) => (
+            <div key={label} className={panelClass}>
+              <div className="mb-4 text-sm font-medium text-white/60">{label}</div>
+              <div className="flex flex-col items-center gap-4">
+                <img
+                  src={`https://play.pokemonshowdown.com/sprites/gen5ani/${p.name.toLowerCase()}.gif`}
+                  alt={p.name}
+                  className="h-32 w-32 object-contain"
+                  onError={(e) => {
+                    e.currentTarget.src = `https://play.pokemonshowdown.com/sprites/gen5/${p.name.toLowerCase()}.png`;
+                  }}
+                />
+                <div className="text-2xl font-semibold tracking-tight text-white">{p.name}</div>
+                <div className="w-full space-y-1">
+                  <div className="flex justify-between text-xs text-white/60">
+                    <span>HP</span>
+                    <span>
+                      {p.hp}/{p.maxHp}
+                    </span>
+                  </div>
+                  <div className="h-3 w-full rounded-full bg-white/10">
+                    <div
+                      className={`h-3 rounded-full transition-all duration-500 ${getHpBarClass(
+                        hpPercent(p.hp, p.maxHp)
+                      )}`}
+                      style={{ width: `${hpPercent(p.hp, p.maxHp)}%` }}
+                    />
+                  </div>
+                  {p.status && (
+                    <div className="text-xs uppercase tracking-wide text-white/45">
+                      Status: {p.status}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )
+        )}
+      </div>
+
+      {!battleState.isEnded && (
+        <div className={panelClass}>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h3 className="text-sm font-medium tracking-wide text-white/70">Choose Your Move</h3>
+            <div className="text-xs text-white/45">
+              {playerCanAct ? "Your turn" : "Move input locked"}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {battleState.availableMoves.map((move, index) => (
+              <button
+                key={`${move.name}-${index}`}
+                type="button"
+                onClick={() => onSubmitMove(index + 1, move.name)}
+                disabled={!playerCanAct}
+                className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 text-left transition-colors hover:border-white/20 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <div className="text-sm font-medium tracking-tight text-white">{move.name}</div>
+                <div className="mt-1 text-xs text-white/55">
+                  {move.type}
+                  {move.power ? ` • Power ${move.power}` : ""}
+                </div>
+                <div className="mt-1 text-xs text-white/40">
+                  PP {move.pp}/{move.maxPp}
+                </div>
+              </button>
+            ))}
+          </div>
+          <div className="mt-4 rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/70">
+            {statusText}
+          </div>
+          {moveSubmitError && (
+            <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-sm text-white/65">
+              {moveSubmitError}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className={panelClass}>
+        <h3 className="mb-4 text-sm font-medium tracking-wide text-white/70">Battle Log</h3>
+        <div className="max-h-72 overflow-y-auto rounded-xl border border-white/10 bg-black/50 p-4">
+          <div className="space-y-1 font-mono text-sm text-white/80">
+            <div>Battle started!</div>
+            {battleState.turnLog.map((entry, index) => (
+              <div key={index}>{formatTurnLogEntry(entry)}</div>
             ))}
           </div>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Turn Counter */}
-      <div className="text-center text-purple-300">
-        Turn: {battleState.currentTurn}
+export function InteractiveBattle() {
+  const [setup, setSetup] = useState<BattleSetupState>({
+    p1: {
+      query: "",
+      selectedPokemon: null,
+      selectedMoves: [],
+      autoMoves: true,
+    },
+    p2: {
+      query: "",
+      selectedPokemon: null,
+      selectedMoves: [],
+      autoMoves: true,
+    },
+    level: 100,
+    formatid: "gen9ou",
+  });
+  const [battleId, setBattleId] = useState<string | null>(null);
+  const [battleStateSnapshot, setBattleStateSnapshot] = useState<BattleState | null>(null);
+  const [moveUiError, setMoveUiError] = useState<string | null>(null);
+  const [pendingMoveName, setPendingMoveName] = useState<string | null>(null);
+
+  const p1SearchDebounced = useDebouncedValue(setup.p1.query.trim(), SEARCH_DEBOUNCE_MS);
+  const p2SearchDebounced = useDebouncedValue(setup.p2.query.trim(), SEARCH_DEBOUNCE_MS);
+
+  const p1SearchQuery = useQuery({
+    queryKey: ["pokemon-search", "p1", p1SearchDebounced],
+    queryFn: async () => {
+      const payload = await fetchJson<unknown>(
+        `${API_URL}/battle/pokemon?q=${encodeURIComponent(p1SearchDebounced)}&limit=8`
+      );
+      return normalizePokemonList(payload);
+    },
+    enabled: p1SearchDebounced.length >= 2,
+    refetchOnWindowFocus: false,
+  });
+
+  const p2SearchQuery = useQuery({
+    queryKey: ["pokemon-search", "p2", p2SearchDebounced],
+    queryFn: async () => {
+      const payload = await fetchJson<unknown>(
+        `${API_URL}/battle/pokemon?q=${encodeURIComponent(p2SearchDebounced)}&limit=8`
+      );
+      return normalizePokemonList(payload);
+    },
+    enabled: p2SearchDebounced.length >= 2,
+    refetchOnWindowFocus: false,
+  });
+
+  const p1DetailsQuery = useQuery({
+    queryKey: ["pokemon-details", setup.p1.selectedPokemon?.name],
+    queryFn: async () => {
+      const payload = await fetchJson<unknown>(
+        `${API_URL}/battle/pokemon/${encodeURIComponent(setup.p1.selectedPokemon!.name)}`
+      );
+      return normalizePokemonDetails(payload);
+    },
+    enabled: !!setup.p1.selectedPokemon?.name,
+    refetchOnWindowFocus: false,
+  });
+
+  const p2DetailsQuery = useQuery({
+    queryKey: ["pokemon-details", setup.p2.selectedPokemon?.name],
+    queryFn: async () => {
+      const payload = await fetchJson<unknown>(
+        `${API_URL}/battle/pokemon/${encodeURIComponent(setup.p2.selectedPokemon!.name)}`
+      );
+      return normalizePokemonDetails(payload);
+    },
+    enabled: !!setup.p2.selectedPokemon?.name,
+    refetchOnWindowFocus: false,
+  });
+
+  const p1MovesQuery = useQuery({
+    queryKey: ["pokemon-moves", setup.p1.selectedPokemon?.name],
+    queryFn: async () => {
+      const payload = await fetchJson<unknown>(
+        `${API_URL}/battle/pokemon/${encodeURIComponent(
+          setup.p1.selectedPokemon!.name
+        )}/moves?limit=120`
+      );
+      return normalizeMoveList(payload);
+    },
+    enabled: !!setup.p1.selectedPokemon?.name,
+    refetchOnWindowFocus: false,
+  });
+
+  const p2MovesQuery = useQuery({
+    queryKey: ["pokemon-moves", setup.p2.selectedPokemon?.name],
+    queryFn: async () => {
+      const payload = await fetchJson<unknown>(
+        `${API_URL}/battle/pokemon/${encodeURIComponent(
+          setup.p2.selectedPokemon!.name
+        )}/moves?limit=120`
+      );
+      return normalizeMoveList(payload);
+    },
+    enabled: !!setup.p2.selectedPokemon?.name,
+    refetchOnWindowFocus: false,
+  });
+
+  const stateQuery = useQuery({
+    queryKey: ["battle-state", battleId],
+    queryFn: async () => {
+      if (!battleId) throw new Error("No battle ID");
+      return fetchBattleState(battleId);
+    },
+    enabled: !!battleId,
+    refetchOnWindowFocus: false,
+    refetchInterval: (query) => {
+      const state = query.state.data as BattleState | undefined;
+      if (!battleId) return false;
+      if (!state) return 1200;
+      if (state.isEnded || state.phase === "ended") return false;
+      if (state.phase === "resolving") return 700;
+      if (sideNeedsMove(state, "p2")) return 900;
+      return 1200;
+    },
+  });
+
+  const liveBattleState = stateQuery.data ?? battleStateSnapshot;
+
+  useEffect(() => {
+    if (stateQuery.data) {
+      setBattleStateSnapshot(stateQuery.data);
+    }
+  }, [stateQuery.data]);
+
+  const startBattleMutation = useMutation({
+    mutationFn: async () => {
+      const body = {
+        p1Pokemon: setup.p1.selectedPokemon?.name,
+        p2Pokemon: setup.p2.selectedPokemon?.name,
+        p1Moves: setup.p1.autoMoves ? undefined : setup.p1.selectedMoves,
+        p2Moves: setup.p2.autoMoves ? undefined : setup.p2.selectedMoves,
+        level: setup.level,
+        formatid: setup.formatid,
+      };
+
+      const response = await fetch(`${API_URL}/battle/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(text || "Failed to start battle");
+      }
+
+      return response.json() as Promise<BattleState>;
+    },
+    onSuccess: (state) => {
+      setBattleId(state.battleId);
+      setBattleStateSnapshot(state);
+      setMoveUiError(null);
+      setPendingMoveName(null);
+    },
+  });
+
+  const submitMoveMutation = useMutation({
+    mutationFn: async ({
+      moveIndexOneBased,
+      moveName,
+    }: {
+      moveIndexOneBased: number;
+      moveName: string;
+    }) => {
+      if (!battleId) throw new Error("No active battle");
+
+      setMoveUiError(null);
+      setPendingMoveName(moveName);
+
+      await postBattleMove({
+        battleId,
+        player: "p1",
+        moveIndex: moveIndexOneBased,
+      });
+
+      let latestState = await fetchBattleState(battleId);
+      setBattleStateSnapshot(latestState);
+
+      if (sideNeedsMove(latestState, "p2")) {
+        await sleep(CPU_MOVE_DELAY_MS);
+
+        const cpuMoveCount =
+          (setup.p2.autoMoves ? 4 : Math.max(1, setup.p2.selectedMoves.length)) || 4;
+        const cpuMoveIndex = Math.floor(Math.random() * cpuMoveCount) + 1;
+
+        try {
+          const cpuResponseState = await postBattleMove({
+            battleId,
+            player: "p2",
+            moveIndex: cpuMoveIndex,
+          });
+          latestState = cpuResponseState;
+        } catch (error) {
+          const status = (error as Error & { status?: number }).status;
+          if (status !== 400 && status !== 404) throw error;
+          latestState = await fetchBattleState(battleId);
+        }
+      }
+
+      return latestState;
+    },
+    onSuccess: (state) => {
+      setBattleStateSnapshot(state);
+      setPendingMoveName(null);
+    },
+    onError: async (error) => {
+      setPendingMoveName(null);
+      setMoveUiError((error as Error).message || "Failed to submit move");
+      if (battleId) {
+        try {
+          const recovered = await fetchBattleState(battleId);
+          setBattleStateSnapshot(recovered);
+        } catch {
+          // Keep UI recoverable even if refetch fails.
+        }
+      }
+    },
+  });
+
+  const updateSide = (side: SideKey, updater: (prev: SideSetup) => SideSetup) => {
+    setSetup((prev) => ({ ...prev, [side]: updater(prev[side]) }));
+  };
+
+  const handleSelectPokemon = (side: SideKey, pokemon: PokemonSearchItem) => {
+    updateSide(side, (prev) => ({
+      ...prev,
+      selectedPokemon: pokemon,
+      query: pokemon.name,
+      selectedMoves: [],
+      autoMoves: true,
+    }));
+  };
+
+  const handleToggleMove = (side: SideKey, moveName: string) => {
+    updateSide(side, (prev) => {
+      const exists = prev.selectedMoves.includes(moveName);
+      if (exists) {
+        return { ...prev, autoMoves: false, selectedMoves: prev.selectedMoves.filter((m) => m !== moveName) };
+      }
+      if (prev.selectedMoves.length >= 4) return { ...prev, autoMoves: false };
+      return {
+        ...prev,
+        autoMoves: false,
+        selectedMoves: [...prev.selectedMoves, moveName],
+      };
+    });
+  };
+
+  const setupReady = !!setup.p1.selectedPokemon && !!setup.p2.selectedPokemon;
+
+  const statusText = deriveStatusText({
+    state: liveBattleState,
+    pendingMoveName,
+    isSubmitting: submitMoveMutation.isPending,
+    errorMessage: moveUiError,
+  });
+
+  if (battleId && liveBattleState) {
+    return (
+      <BattleArena
+        battleState={liveBattleState}
+        statusText={statusText}
+        moveSubmitPending={submitMoveMutation.isPending}
+        moveSubmitError={moveUiError}
+        onSubmitMove={(moveIndexOneBased, moveName) => {
+          if (!canPlayerAct(liveBattleState, submitMoveMutation.isPending)) return;
+          submitMoveMutation.mutate({ moveIndexOneBased, moveName });
+        }}
+        onLeaveBattle={() => {
+          setBattleId(null);
+          setBattleStateSnapshot(null);
+          setPendingMoveName(null);
+          setMoveUiError(null);
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className={`${panelClass} flex flex-wrap items-center justify-between gap-4`}>
+        <div>
+          <div className="text-xs tracking-[0.18em] text-white/40">SETUP</div>
+          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white">
+            Configure Battle
+          </h2>
+          <p className="mt-1 text-sm text-white/55">
+            Pick any Pokémon for both sides, optionally choose moves, then start.
+          </p>
+        </div>
+        <div className="flex items-center gap-3 text-sm text-white/55">
+          <label className="flex items-center gap-2">
+            <span>Level</span>
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={setup.level}
+              onChange={(e) =>
+                setSetup((prev) => ({
+                  ...prev,
+                  level: Number.isNaN(Number(e.target.value))
+                    ? prev.level
+                    : Math.min(100, Math.max(1, Number(e.target.value))),
+                }))
+              }
+              className="w-16 rounded-md border border-white/10 bg-black/40 px-2 py-1 text-white outline-none"
+            />
+          </label>
+          <label className="flex items-center gap-2">
+            <span>Format</span>
+            <input
+              value={setup.formatid}
+              onChange={(e) => setSetup((prev) => ({ ...prev, formatid: e.target.value }))}
+              className="w-28 rounded-md border border-white/10 bg-black/40 px-2 py-1 text-white outline-none"
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <PokemonSetupPanel
+          side="p1"
+          label="Player Pokémon (P1)"
+          setup={setup.p1}
+          onQueryChange={(value) => updateSide("p1", (prev) => ({ ...prev, query: value }))}
+          onSelectPokemon={(pokemon) => handleSelectPokemon("p1", pokemon)}
+          onClearPokemon={() =>
+            updateSide("p1", () => ({
+              query: "",
+              selectedPokemon: null,
+              selectedMoves: [],
+              autoMoves: true,
+            }))
+          }
+          onToggleMove={(moveName) => handleToggleMove("p1", moveName)}
+          onClearMoves={() => updateSide("p1", (prev) => ({ ...prev, selectedMoves: [], autoMoves: false }))}
+          onSetAutoMoves={(value) => updateSide("p1", (prev) => ({ ...prev, autoMoves: value }))}
+          searchResults={p1SearchQuery.data ?? []}
+          searchLoading={p1SearchQuery.isFetching}
+          searchError={p1SearchQuery.error ? (p1SearchQuery.error as Error).message : null}
+          details={p1DetailsQuery.data ?? null}
+          moves={p1MovesQuery.data ?? []}
+          movesLoading={p1MovesQuery.isFetching}
+        />
+
+        <PokemonSetupPanel
+          side="p2"
+          label="CPU Pokémon (P2)"
+          setup={setup.p2}
+          onQueryChange={(value) => updateSide("p2", (prev) => ({ ...prev, query: value }))}
+          onSelectPokemon={(pokemon) => handleSelectPokemon("p2", pokemon)}
+          onClearPokemon={() =>
+            updateSide("p2", () => ({
+              query: "",
+              selectedPokemon: null,
+              selectedMoves: [],
+              autoMoves: true,
+            }))
+          }
+          onToggleMove={(moveName) => handleToggleMove("p2", moveName)}
+          onClearMoves={() => updateSide("p2", (prev) => ({ ...prev, selectedMoves: [], autoMoves: false }))}
+          onSetAutoMoves={(value) => updateSide("p2", (prev) => ({ ...prev, autoMoves: value }))}
+          searchResults={p2SearchQuery.data ?? []}
+          searchLoading={p2SearchQuery.isFetching}
+          searchError={p2SearchQuery.error ? (p2SearchQuery.error as Error).message : null}
+          details={p2DetailsQuery.data ?? null}
+          moves={p2MovesQuery.data ?? []}
+          movesLoading={p2MovesQuery.isFetching}
+        />
+      </div>
+
+      <div className={panelClass}>
+        <div className="mb-4 text-sm font-medium tracking-wide text-white/70">Battle Summary</div>
+        <div className="grid gap-4 md:grid-cols-2">
+          {[{ label: "P1", data: setup.p1 }, { label: "P2", data: setup.p2 }].map(({ label, data }) => (
+            <div key={label} className="rounded-xl border border-white/10 bg-black/40 p-4">
+              <div className="text-xs tracking-wide text-white/45">{label}</div>
+              <div className="mt-1 text-sm font-medium text-white">
+                {data.selectedPokemon?.name ?? "Not selected"}
+              </div>
+              {data.selectedPokemon && (
+                <div className="mt-1 text-xs text-white/50">
+                  {data.autoMoves
+                    ? "Moves: auto-select"
+                    : data.selectedMoves.length
+                    ? `Moves: ${data.selectedMoves.join(", ")}`
+                    : "Moves: none selected (backend may reject if auto is off)"}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {startBattleMutation.error && (
+          <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-sm text-white/65">
+            {(startBattleMutation.error as Error).message}
+          </div>
+        )}
+
+        <div className="mt-5 flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={() => startBattleMutation.mutate()}
+            disabled={!setupReady || startBattleMutation.isPending}
+            className="rounded-lg border border-white/15 bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {startBattleMutation.isPending ? "Starting..." : "Start Battle"}
+          </button>
+          {!setupReady && (
+            <div className="self-center text-xs text-white/45">
+              Select Pokémon for both P1 and P2 to continue.
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
