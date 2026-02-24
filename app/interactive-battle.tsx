@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 const API_URL = "http://localhost:5200/api";
 const SEARCH_DEBOUNCE_MS = 300;
@@ -653,6 +653,16 @@ function BattleArena(params: {
 
   const playerCanAct =
     canPlayerAct(battleState, moveSubmitPending) && !isTurnAnimating;
+  const currentHpPercents = {
+    p1:
+      isTurnAnimating && visualHpPercents
+        ? visualHpPercents.p1
+        : hpPercent(battleState.p1Pokemon.hp, battleState.p1Pokemon.maxHp),
+    p2:
+      isTurnAnimating && visualHpPercents
+        ? visualHpPercents.p2
+        : hpPercent(battleState.p2Pokemon.hp, battleState.p2Pokemon.maxHp),
+  };
 
   return (
     <div className="space-y-6">
@@ -684,9 +694,13 @@ function BattleArena(params: {
 
       <div className="grid gap-6 md:grid-cols-2">
         {[
-          { label: "Your Pokémon", p: battleState.p1Pokemon },
-          { label: "Opponent - gpt5.2 nano", p: battleState.p2Pokemon },
-        ].map(({ label, p }) => (
+          { key: "p1" as const, label: "Your Pokémon", p: battleState.p1Pokemon },
+          {
+            key: "p2" as const,
+            label: "Opponent - gpt5.2 nano",
+            p: battleState.p2Pokemon,
+          },
+        ].map(({ key, label, p }) => (
           <div key={label} className={panelClass}>
             <div className="mb-4 text-sm font-medium text-white/60">
               {label}
@@ -706,30 +720,15 @@ function BattleArena(params: {
               <div className="w-full space-y-1">
                 <div className="flex justify-between text-xs text-white/60">
                   <span>HP</span>
-                  <span>
-                    {visualHpPercents
-                      ? visualHpPercents[label === "Your Pokémon" ? "p1" : "p2"]
-                      : hpPercent(p.hp, p.maxHp)}
-                    %
-                  </span>
+                  <span>{currentHpPercents[key]}%</span>
                 </div>
                 <div className="h-3 w-full rounded-full bg-white/10">
                   <div
                     className={`h-3 rounded-full transition-all duration-500 ${getHpBarClass(
-                      visualHpPercents
-                        ? visualHpPercents[
-                            label === "Your Pokémon" ? "p1" : "p2"
-                          ]
-                        : hpPercent(p.hp, p.maxHp),
+                      currentHpPercents[key],
                     )}`}
                     style={{
-                      width: `${
-                        visualHpPercents
-                          ? visualHpPercents[
-                              label === "Your Pokémon" ? "p1" : "p2"
-                            ]
-                          : hpPercent(p.hp, p.maxHp)
-                      }%`,
+                      width: `${currentHpPercents[key]}%`,
                     }}
                   />
                 </div>
@@ -835,7 +834,6 @@ export function InteractiveBattle() {
   const [animatedStatusText, setAnimatedStatusText] = useState<string | null>(
     null,
   );
-  const processedTurnLogCountRef = useRef(0);
 
   const p1SearchDebounced = useDebouncedValue(
     setup.p1.query.trim(),
@@ -959,29 +957,6 @@ export function InteractiveBattle() {
   const p2ResolvedAutoMoves =
     setup.p2.autoMoves && p2ResolvedSelectedMoves.length === 0;
 
-  useEffect(() => {
-    if (!liveBattleState || isTurnAnimating) return;
-    setVisualHpPercents({
-      p1: hpPercent(
-        liveBattleState.p1Pokemon.hp,
-        liveBattleState.p1Pokemon.maxHp,
-      ),
-      p2: hpPercent(
-        liveBattleState.p2Pokemon.hp,
-        liveBattleState.p2Pokemon.maxHp,
-      ),
-    });
-
-    const newEntries = liveBattleState.turnLog.slice(
-      processedTurnLogCountRef.current,
-    );
-    if (newEntries.length > 0) {
-      const cleaned = buildDisplayLog(newEntries, []);
-      setDisplayedLogLines((prev) => [...prev, ...cleaned]);
-      processedTurnLogCountRef.current = liveBattleState.turnLog.length;
-    }
-  }, [liveBattleState, isTurnAnimating]);
-
   const startBattleMutation = useMutation({
     mutationFn: async () => {
       const body = {
@@ -1012,7 +987,6 @@ export function InteractiveBattle() {
       setMoveUiError(null);
       setPendingMoveName(null);
       setDisplayedLogLines([]);
-      processedTurnLogCountRef.current = state.turnLog.length;
       setVisualHpPercents({
         p1: hpPercent(state.p1Pokemon.hp, state.p1Pokemon.maxHp),
         p2: hpPercent(state.p2Pokemon.hp, state.p2Pokemon.maxHp),
@@ -1058,6 +1032,7 @@ export function InteractiveBattle() {
       const cleanedNarration = buildDisplayLog(newEntries, []).filter(
         isNarrationLineRelevant,
       );
+      setDisplayedLogLines(buildDisplayLog(stateBeforeTurn?.turnLog ?? [], []));
 
       let nextP1 = hpPercent(
         stateBeforeTurn?.p1Pokemon.hp ?? resolvedState.p1Pokemon.hp,
@@ -1104,7 +1079,6 @@ export function InteractiveBattle() {
         setVisualHpPercents({ p1: finalP1, p2: finalP2 });
       }
 
-      processedTurnLogCountRef.current = resolvedState.turnLog.length;
       setIsTurnAnimating(false);
       setAnimatedStatusText(null);
     },
@@ -1169,13 +1143,17 @@ export function InteractiveBattle() {
     errorMessage: moveUiError,
   });
   const statusText = animatedStatusText ?? derivedStatusText;
+  const resolvedLogLines = liveBattleState
+    ? buildDisplayLog(liveBattleState.turnLog, [])
+    : [];
+  const battleLogLines = isTurnAnimating ? displayedLogLines : resolvedLogLines;
 
   if (battleId && liveBattleState) {
     return (
       <BattleArena
         battleState={liveBattleState}
         visualHpPercents={visualHpPercents}
-        displayedLogLines={displayedLogLines}
+        displayedLogLines={battleLogLines}
         isTurnAnimating={isTurnAnimating}
         statusText={statusText}
         moveSubmitPending={submitMoveMutation.isPending}
@@ -1199,7 +1177,6 @@ export function InteractiveBattle() {
           setVisualHpPercents(null);
           setIsTurnAnimating(false);
           setAnimatedStatusText(null);
-          processedTurnLogCountRef.current = 0;
         }}
       />
     );
