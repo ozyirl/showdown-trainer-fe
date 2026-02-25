@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const API_URL = "http://localhost:5200/api";
 const SEARCH_DEBOUNCE_MS = 300;
@@ -18,6 +18,7 @@ type BattlePokemonState = {
   name: string;
   hp: number;
   maxHp: number;
+  hpPercent?: number | null;
   status: string | null;
 };
 
@@ -41,6 +42,17 @@ type BattleState = {
   waitingForMove: boolean;
   phase?: "awaiting-moves" | "resolving" | "ended" | string;
   pendingPlayers?: Array<"p1" | "p2"> | string[];
+  lastTurnEvents?: unknown[];
+  lastCpuDecision?: {
+    turn?: number;
+    modelId?: string;
+    latencyMs?: number;
+    source?: "model" | "fallback" | string;
+    moveName?: string;
+    reasoning?: string;
+    rawResponse?: unknown;
+    error?: string;
+  } | null;
   lastAction?: string | MoveAcceptedAction | null;
 };
 
@@ -296,6 +308,184 @@ function diffTurnLogEntries(
   return next;
 }
 
+function battleProgressSignature(state: BattleState | null | undefined) {
+  if (!state) return null;
+  return {
+    currentTurn: state.currentTurn,
+    turnLogLength: state.turnLog.length,
+    lastTurnEventsLength: Array.isArray(state.lastTurnEvents)
+      ? state.lastTurnEvents.length
+      : 0,
+    phase: state.phase ?? null,
+  };
+}
+
+function stateHasAdvanced(
+  before: BattleState | null | undefined,
+  after: BattleState | null | undefined,
+) {
+  const b = battleProgressSignature(before);
+  const a = battleProgressSignature(after);
+  if (!b || !a) return false;
+  return (
+    a.currentTurn !== b.currentTurn ||
+    a.turnLogLength > b.turnLogLength ||
+    a.lastTurnEventsLength > b.lastTurnEventsLength ||
+    (b.phase === "resolving" && a.phase !== "resolving")
+  );
+}
+
+function hpPercentFromStatePokemon(pokemon: BattlePokemonState) {
+  if (
+    typeof pokemon.hpPercent === "number" &&
+    Number.isFinite(pokemon.hpPercent)
+  ) {
+    return Math.max(0, Math.min(100, Math.round(pokemon.hpPercent)));
+  }
+  return hpPercent(pokemon.hp, pokemon.maxHp);
+}
+
+function parseCpuDecisionRawResponse(
+  raw?: string,
+): { moveIndex?: number; moveName?: string; reasoning?: string } | null {
+  if (!raw || typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      moveIndex:
+        typeof parsed.moveIndex === "number"
+          ? parsed.moveIndex
+          : typeof parsed.choiceIndex === "number"
+            ? parsed.choiceIndex
+            : undefined,
+      moveName:
+        typeof parsed.moveName === "string"
+          ? parsed.moveName
+          : typeof parsed.move === "string"
+            ? parsed.move
+            : typeof parsed.choice === "string"
+              ? parsed.choice
+              : undefined,
+      reasoning:
+        typeof parsed.reasoning === "string"
+          ? parsed.reasoning
+          : typeof parsed.explanation === "string"
+            ? parsed.explanation
+            : typeof parsed.reason === "string"
+              ? parsed.reason
+              : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeLastTurnEventsToLines(state: BattleState): string[] {
+  const events = Array.isArray(state.lastTurnEvents)
+    ? state.lastTurnEvents
+    : [];
+  const lines: string[] = [];
+
+  for (const event of events) {
+    if (typeof event === "string") {
+      if (event.trim()) lines.push(event.trim());
+      continue;
+    }
+    if (!event || typeof event !== "object") continue;
+    const data = event as Record<string, unknown>;
+
+    const textFields = ["display", "message", "text", "summary", "logLine"];
+    let pushed = false;
+    for (const key of textFields) {
+      const value = data[key];
+      if (typeof value === "string" && value.trim()) {
+        lines.push(value.trim());
+        pushed = true;
+        break;
+      }
+    }
+    if (pushed) continue;
+
+    const actor =
+      typeof data.actor === "string"
+        ? data.actor
+        : typeof data.player === "string"
+          ? data.player
+          : null;
+    const moveName =
+      typeof data.moveName === "string"
+        ? data.moveName
+        : typeof data.move === "string"
+          ? data.move
+          : null;
+    const type =
+      typeof data.type === "string"
+        ? data.type.toLowerCase()
+        : typeof data.kind === "string"
+          ? data.kind.toLowerCase()
+          : "";
+
+    if (
+      moveName &&
+      (type.includes("move") || type.includes("use") || type === "")
+    ) {
+      const actorLabel =
+        actor === "p1"
+          ? state.p1Pokemon.name
+          : actor === "p2"
+            ? state.p2Pokemon.name
+            : actor;
+      if (actorLabel) {
+        lines.push(`${actorLabel} used ${moveName}!`);
+        continue;
+      }
+      lines.push(`Move used: ${moveName}`);
+      continue;
+    }
+
+    if (typeof data.reason === "string" && data.reason.trim()) {
+      lines.push(data.reason.trim());
+    }
+  }
+
+  return buildDisplayLog(lines, []).filter(isNarrationLineRelevant);
+}
+
+function extractCpuReasoningText(decision: BattleState["lastCpuDecision"]) {
+  if (!decision) return null;
+  if (typeof decision.reasoning === "string" && decision.reasoning.trim()) {
+    return decision.reasoning.trim();
+  }
+
+  const raw = decision.rawResponse;
+  if (typeof raw === "string") {
+    const parsed = parseCpuDecisionRawResponse(raw);
+    if (parsed?.reasoning) return parsed.reasoning;
+    return raw.trim() || null;
+  }
+  if (raw && typeof raw === "object") {
+    const data = raw as Record<string, unknown>;
+    const candidates = [
+      data.reasoning,
+      data.explanation,
+      data.reason,
+      data.summary,
+      (data.message as Record<string, unknown> | undefined)?.content,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim()) {
+        return candidate.trim();
+      }
+    }
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function isNarrationLineRelevant(line: string) {
   const lower = line.toLowerCase();
   if (normalizeHpLogLine(line)) return false;
@@ -323,12 +513,14 @@ function formatLastAction(lastAction: BattleState["lastAction"]) {
 }
 
 function canPlayerAct(state: BattleState | null, isSubmitting: boolean) {
-  if (!state || isSubmitting || state.isEnded || state.phase === "ended")
+  if (!state || isSubmitting || state.isEnded || state.phase === "ended") {
     return false;
-  if (Array.isArray(state.pendingPlayers) && state.pendingPlayers.length > 0) {
+  }
+  if (state.phase && state.phase !== "awaiting-moves") return false;
+  if (Array.isArray(state.pendingPlayers)) {
     return state.pendingPlayers.includes("p1");
   }
-  return state.waitingForMove;
+  return state.waitingForMove === true;
 }
 
 function sideNeedsMove(state: BattleState | null, player: "p1" | "p2") {
@@ -352,9 +544,18 @@ function deriveStatusText(params: {
   if (state.isEnded || state.phase === "ended") {
     return state.winner ? `${state.winner} wins.` : "Battle ended.";
   }
-  if (isSubmitting && pendingMoveName)
-    return `Move selected: ${pendingMoveName}`;
+  if (isSubmitting && pendingMoveName) {
+    return `CPU is choosing a move... (${pendingMoveName} selected)`;
+  }
+  if (isSubmitting) return "CPU is choosing a move...";
   if (state.phase === "resolving") return "Resolving turn...";
+  if (
+    state.phase &&
+    state.phase !== "awaiting-moves" &&
+    !sideNeedsMove(state, "p1")
+  ) {
+    return "Waiting for forced action / recharge resolution...";
+  }
   if (sideNeedsMove(state, "p2")) return "Waiting for opponent...";
   if (sideNeedsMove(state, "p1")) return "Choose your move.";
   return formatLastAction(state.lastAction) ?? "Battle in progress...";
@@ -633,6 +834,7 @@ function BattleArena(params: {
   visualHpPercents: { p1: number; p2: number } | null;
   displayedLogLines: string[];
   isTurnAnimating: boolean;
+  isSubmittingMove: boolean;
   statusText: string;
   moveSubmitPending: boolean;
   moveSubmitError: string | null;
@@ -644,6 +846,7 @@ function BattleArena(params: {
     visualHpPercents,
     displayedLogLines,
     isTurnAnimating,
+    isSubmittingMove,
     statusText,
     moveSubmitPending,
     moveSubmitError,
@@ -652,17 +855,23 @@ function BattleArena(params: {
   } = params;
 
   const playerCanAct =
-    canPlayerAct(battleState, moveSubmitPending) && !isTurnAnimating;
+    canPlayerAct(battleState, moveSubmitPending || isSubmittingMove) &&
+    !isTurnAnimating;
   const currentHpPercents = {
     p1:
       isTurnAnimating && visualHpPercents
         ? visualHpPercents.p1
-        : hpPercent(battleState.p1Pokemon.hp, battleState.p1Pokemon.maxHp),
+        : hpPercentFromStatePokemon(battleState.p1Pokemon),
     p2:
       isTurnAnimating && visualHpPercents
         ? visualHpPercents.p2
-        : hpPercent(battleState.p2Pokemon.hp, battleState.p2Pokemon.maxHp),
+        : hpPercentFromStatePokemon(battleState.p2Pokemon),
   };
+  const cpuReasoning = extractCpuReasoningText(battleState.lastCpuDecision);
+  const parsedCpuRaw =
+    typeof battleState.lastCpuDecision?.rawResponse === "string"
+      ? parseCpuDecisionRawResponse(battleState.lastCpuDecision.rawResponse)
+      : null;
 
   return (
     <div className="space-y-6">
@@ -692,12 +901,16 @@ function BattleArena(params: {
         </div>
       )}
 
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-3">
         {[
-          { key: "p1" as const, label: "Your Pokémon", p: battleState.p1Pokemon },
+          {
+            key: "p1" as const,
+            label: "Your Pokémon",
+            p: battleState.p1Pokemon,
+          },
           {
             key: "p2" as const,
-            label: "Opponent - gpt5.2 nano",
+            label: "Opponent",
             p: battleState.p2Pokemon,
           },
         ].map(({ key, label, p }) => (
@@ -741,6 +954,80 @@ function BattleArena(params: {
             </div>
           </div>
         ))}
+
+        <div className={panelClass}>
+          <div className="mb-4 text-sm font-medium text-white/70">
+            CPU Analysis
+          </div>
+          {battleState.lastCpuDecision ? (
+            <div className="space-y-3 text-sm">
+              <div className="grid grid-cols-2 gap-2 text-xs text-white/55">
+                <div>
+                  Turn:{" "}
+                  {battleState.lastCpuDecision.turn ?? battleState.currentTurn}
+                </div>
+                <div>
+                  Source: {battleState.lastCpuDecision.source ?? "unknown"}
+                </div>
+                <div className="col-span-2 truncate">
+                  Model: {battleState.lastCpuDecision.modelId ?? "n/a"}
+                </div>
+                <div>
+                  Latency:{" "}
+                  {typeof battleState.lastCpuDecision.latencyMs === "number"
+                    ? `${battleState.lastCpuDecision.latencyMs}ms`
+                    : "n/a"}
+                </div>
+                <div>
+                  {battleState.lastCpuDecision.error ? "Warning" : "Status"}:{" "}
+                  {battleState.lastCpuDecision.error ? "fallback/error" : "ok"}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] text-white/65">
+                  {battleState.lastCpuDecision.source === "fallback"
+                    ? "Fallback"
+                    : "Model"}
+                </span>
+                {typeof battleState.lastCpuDecision.latencyMs === "number" &&
+                  battleState.lastCpuDecision.latencyMs > 2000 && (
+                    <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] text-white/65">
+                      Slow
+                    </span>
+                  )}
+              </div>
+              <div className="rounded-lg border border-white/10 bg-black/40 p-3">
+                <div className="text-xs text-white/45">Selected move</div>
+                <div className="mt-1 font-medium text-white">
+                  {battleState.lastCpuDecision.moveName ??
+                    parsedCpuRaw?.moveName ??
+                    "Unknown"}
+                </div>
+              </div>
+              {cpuReasoning && (
+                <div className="rounded-lg border border-white/10 bg-black/40 p-3">
+                  <div className="mb-1 text-xs text-white/45">Reasoning</div>
+                  <div className="line-clamp-6 whitespace-pre-wrap text-xs leading-relaxed text-white/70">
+                    {cpuReasoning}
+                  </div>
+                </div>
+              )}
+              {(battleState.lastCpuDecision.source === "fallback" ||
+                battleState.lastCpuDecision.error) && (
+                <div className="rounded-md border border-white/10 bg-white/[0.02] px-2.5 py-2 text-xs text-white/60">
+                  CPU used fallback logic
+                  {battleState.lastCpuDecision.error
+                    ? `: ${battleState.lastCpuDecision.error}`
+                    : "."}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-sm text-white/50">
+              No CPU decision data yet.
+            </div>
+          )}
+        </div>
       </div>
 
       {!battleState.isEnded && (
@@ -834,6 +1121,8 @@ export function InteractiveBattle() {
   const [animatedStatusText, setAnimatedStatusText] = useState<string | null>(
     null,
   );
+  const [isSubmittingMove, setIsSubmittingMove] = useState(false);
+  const isSubmittingMoveRef = useRef(false);
 
   const p1SearchDebounced = useDebouncedValue(
     setup.p1.query.trim(),
@@ -988,11 +1277,13 @@ export function InteractiveBattle() {
       setPendingMoveName(null);
       setDisplayedLogLines([]);
       setVisualHpPercents({
-        p1: hpPercent(state.p1Pokemon.hp, state.p1Pokemon.maxHp),
-        p2: hpPercent(state.p2Pokemon.hp, state.p2Pokemon.maxHp),
+        p1: hpPercentFromStatePokemon(state.p1Pokemon),
+        p2: hpPercentFromStatePokemon(state.p2Pokemon),
       });
       setIsTurnAnimating(false);
       setAnimatedStatusText(null);
+      setIsSubmittingMove(false);
+      isSubmittingMoveRef.current = false;
     },
   });
 
@@ -1006,20 +1297,58 @@ export function InteractiveBattle() {
     }) => {
       if (!battleId) throw new Error("No active battle");
 
+      const stateBeforeTurn = liveBattleState ?? battleStateSnapshot;
+
       setMoveUiError(null);
       setPendingMoveName(moveName);
       setAnimatedStatusText(`Move selected: ${moveName}`);
+      setIsSubmittingMove(true);
+      isSubmittingMoveRef.current = true;
 
-      const stateBeforeTurn = liveBattleState ?? battleStateSnapshot;
-      const resolvedState = await postBattleMove({
-        battleId,
-        player: "p1",
-        moveIndex: moveIndexOneBased,
-      });
-      return {
-        resolvedState,
-        stateBeforeTurn,
-      };
+      try {
+        const resolvedState = await postBattleMove({
+          battleId,
+          player: "p1",
+          moveIndex: moveIndexOneBased,
+        });
+        return {
+          resolvedState,
+          stateBeforeTurn,
+          recoveredFromConflict: false,
+        };
+      } catch (error) {
+        const status = (error as Error & { status?: number }).status;
+        if (status !== 400 && status !== 409) throw error;
+
+        const recoveredState = await fetchBattleState(battleId);
+        if (stateHasAdvanced(stateBeforeTurn, recoveredState)) {
+          return {
+            resolvedState: recoveredState,
+            stateBeforeTurn,
+            recoveredFromConflict: true,
+          };
+        }
+
+        if (status === 409) {
+          const err = new Error("Turn is already resolving...");
+          (err as Error & { status?: number }).status = 409;
+          throw err;
+        }
+
+        if (sideNeedsMove(recoveredState, "p1")) {
+          const err = new Error(
+            "That move is no longer legal this turn. Please choose again.",
+          );
+          (err as Error & { status?: number }).status = 400;
+          throw err;
+        }
+
+        return {
+          resolvedState: recoveredState,
+          stateBeforeTurn,
+          recoveredFromConflict: true,
+        };
+      }
     },
     onSuccess: async ({ resolvedState, stateBeforeTurn }) => {
       setBattleStateSnapshot(resolvedState);
@@ -1027,29 +1356,24 @@ export function InteractiveBattle() {
       setIsTurnAnimating(true);
       setAnimatedStatusText("Resolving turn...");
 
+      const eventNarration = normalizeLastTurnEventsToLines(resolvedState);
       const prevTurnLog = stateBeforeTurn?.turnLog;
       const newEntries = diffTurnLogEntries(prevTurnLog, resolvedState.turnLog);
-      const cleanedNarration = buildDisplayLog(newEntries, []).filter(
+      const fallbackNarration = buildDisplayLog(newEntries, []).filter(
         isNarrationLineRelevant,
       );
+      const cleanedNarration =
+        eventNarration.length > 0 ? eventNarration : fallbackNarration;
       setDisplayedLogLines(buildDisplayLog(stateBeforeTurn?.turnLog ?? [], []));
 
-      let nextP1 = hpPercent(
-        stateBeforeTurn?.p1Pokemon.hp ?? resolvedState.p1Pokemon.hp,
-        stateBeforeTurn?.p1Pokemon.maxHp ?? resolvedState.p1Pokemon.maxHp,
-      );
-      let nextP2 = hpPercent(
-        stateBeforeTurn?.p2Pokemon.hp ?? resolvedState.p2Pokemon.hp,
-        stateBeforeTurn?.p2Pokemon.maxHp ?? resolvedState.p2Pokemon.maxHp,
-      );
-      const finalP1 = hpPercent(
-        resolvedState.p1Pokemon.hp,
-        resolvedState.p1Pokemon.maxHp,
-      );
-      const finalP2 = hpPercent(
-        resolvedState.p2Pokemon.hp,
-        resolvedState.p2Pokemon.maxHp,
-      );
+      let nextP1 = stateBeforeTurn
+        ? hpPercentFromStatePokemon(stateBeforeTurn.p1Pokemon)
+        : hpPercentFromStatePokemon(resolvedState.p1Pokemon);
+      let nextP2 = stateBeforeTurn
+        ? hpPercentFromStatePokemon(stateBeforeTurn.p2Pokemon)
+        : hpPercentFromStatePokemon(resolvedState.p2Pokemon);
+      const finalP1 = hpPercentFromStatePokemon(resolvedState.p1Pokemon);
+      const finalP2 = hpPercentFromStatePokemon(resolvedState.p2Pokemon);
 
       setVisualHpPercents({ p1: nextP1, p2: nextP2 });
 
@@ -1081,11 +1405,15 @@ export function InteractiveBattle() {
 
       setIsTurnAnimating(false);
       setAnimatedStatusText(null);
+      setIsSubmittingMove(false);
+      isSubmittingMoveRef.current = false;
     },
     onError: async (error) => {
       setPendingMoveName(null);
       setIsTurnAnimating(false);
       setAnimatedStatusText(null);
+      setIsSubmittingMove(false);
+      isSubmittingMoveRef.current = false;
       setMoveUiError((error as Error).message || "Failed to submit move");
       if (battleId) {
         try {
@@ -1139,7 +1467,8 @@ export function InteractiveBattle() {
   const derivedStatusText = deriveStatusText({
     state: liveBattleState,
     pendingMoveName,
-    isSubmitting: submitMoveMutation.isPending || isTurnAnimating,
+    isSubmitting:
+      submitMoveMutation.isPending || isTurnAnimating || isSubmittingMove,
     errorMessage: moveUiError,
   });
   const statusText = animatedStatusText ?? derivedStatusText;
@@ -1155,14 +1484,18 @@ export function InteractiveBattle() {
         visualHpPercents={visualHpPercents}
         displayedLogLines={battleLogLines}
         isTurnAnimating={isTurnAnimating}
+        isSubmittingMove={isSubmittingMove}
         statusText={statusText}
         moveSubmitPending={submitMoveMutation.isPending}
         moveSubmitError={moveUiError}
         onSubmitMove={(moveIndexOneBased, moveName) => {
+          if (isSubmittingMoveRef.current) return;
           if (
             !canPlayerAct(
               liveBattleState,
-              submitMoveMutation.isPending || isTurnAnimating,
+              submitMoveMutation.isPending ||
+                isTurnAnimating ||
+                isSubmittingMove,
             )
           )
             return;
@@ -1177,6 +1510,8 @@ export function InteractiveBattle() {
           setVisualHpPercents(null);
           setIsTurnAnimating(false);
           setAnimatedStatusText(null);
+          setIsSubmittingMove(false);
+          isSubmittingMoveRef.current = false;
         }}
       />
     );
