@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 const API_URL = "http://localhost:5200/api";
@@ -101,6 +102,10 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const panelClass =
   "rounded-2xl border border-white/10 bg-white/[0.03] p-6 backdrop-blur";
+
+type InteractiveBattleProps = {
+  initialBattleId?: string | null;
+};
 
 function useDebouncedValue<T>(value: T, delayMs: number) {
   const [debounced, setDebounced] = useState(value);
@@ -1090,7 +1095,11 @@ function BattleArena(params: {
   );
 }
 
-export function InteractiveBattle() {
+export function InteractiveBattle({
+  initialBattleId = null,
+}: InteractiveBattleProps) {
+  const router = useRouter();
+  const pathname = usePathname();
   const [setup, setSetup] = useState<BattleSetupState>({
     p1: {
       query: "",
@@ -1107,7 +1116,7 @@ export function InteractiveBattle() {
     level: 100,
     formatid: "gen9ou",
   });
-  const [battleId, setBattleId] = useState<string | null>(null);
+  const [battleId, setBattleId] = useState<string | null>(initialBattleId);
   const [battleStateSnapshot, setBattleStateSnapshot] =
     useState<BattleState | null>(null);
   const [moveUiError, setMoveUiError] = useState<string | null>(null);
@@ -1272,6 +1281,9 @@ export function InteractiveBattle() {
     },
     onSuccess: (state) => {
       setBattleId(state.battleId);
+      if (pathname !== `/battle/${state.battleId}`) {
+        router.push(`/battle/${state.battleId}`);
+      }
       setBattleStateSnapshot(state);
       setMoveUiError(null);
       setPendingMoveName(null);
@@ -1477,6 +1489,40 @@ export function InteractiveBattle() {
     : [];
   const battleLogLines = isTurnAnimating ? displayedLogLines : resolvedLogLines;
 
+  if (battleId && !liveBattleState) {
+    return (
+      <div className="space-y-6">
+        <div className={panelClass}>
+          <div className="text-sm font-medium text-white/70">Loading Battle</div>
+          <div className="mt-2 text-sm text-white/55">
+            Restoring battle state for <span className="font-mono">{battleId}</span>...
+          </div>
+          {stateQuery.error && (
+            <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-sm text-white/65">
+              {(stateQuery.error as Error).message}
+            </div>
+          )}
+          <div className="mt-4 flex gap-2">
+            <button
+              type="button"
+              onClick={() => stateQuery.refetch()}
+              className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/75 hover:bg-white/[0.06]"
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/")}
+              className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/75 hover:bg-white/[0.06]"
+            >
+              Back to Setup
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (battleId && liveBattleState) {
     return (
       <BattleArena
@@ -1512,6 +1558,7 @@ export function InteractiveBattle() {
           setAnimatedStatusText(null);
           setIsSubmittingMove(false);
           isSubmittingMoveRef.current = false;
+          if (pathname !== "/") router.push("/");
         }}
       />
     );
@@ -1519,51 +1566,6 @@ export function InteractiveBattle() {
 
   return (
     <div className="space-y-6">
-      <div
-        className={`${panelClass} flex flex-wrap items-center justify-between gap-4`}
-      >
-        <div>
-          <div className="text-xs tracking-[0.18em] text-white/40">SETUP</div>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white">
-            Configure Battle
-          </h2>
-          <p className="mt-1 text-sm text-white/55">
-            Pick any Pokémon for both sides, optionally choose moves, then
-            start.
-          </p>
-        </div>
-        <div className="flex items-center gap-3 text-sm text-white/55">
-          <label className="flex items-center gap-2">
-            <span>Level</span>
-            <input
-              type="number"
-              min={1}
-              max={100}
-              value={setup.level}
-              onChange={(e) =>
-                setSetup((prev) => ({
-                  ...prev,
-                  level: Number.isNaN(Number(e.target.value))
-                    ? prev.level
-                    : Math.min(100, Math.max(1, Number(e.target.value))),
-                }))
-              }
-              className="w-16 rounded-md border border-white/10 bg-black/40 px-2 py-1 text-white outline-none"
-            />
-          </label>
-          <label className="flex items-center gap-2">
-            <span>Format</span>
-            <input
-              value={setup.formatid}
-              onChange={(e) =>
-                setSetup((prev) => ({ ...prev, formatid: e.target.value }))
-              }
-              className="w-28 rounded-md border border-white/10 bg-black/40 px-2 py-1 text-white outline-none"
-            />
-          </label>
-        </div>
-      </div>
-
       <div className="grid gap-6 lg:grid-cols-2">
         <PokemonSetupPanel
           side="p1"
