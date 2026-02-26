@@ -138,11 +138,6 @@ export default function Home() {
                   Train With AI
                 </TextCursorProximity>
               </div>
-              <p className="mt-4 max-w-xl text-base leading-relaxed text-white/60">
-                Blue-black battle workspace for teambuilding, Elite Four runs,
-                AI-vs-AI simulation, live battle guidance, and practice against
-                an AI trainer.
-              </p>
 
               <div className="mt-8 flex flex-wrap gap-2">
                 <button
