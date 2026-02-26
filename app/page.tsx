@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import TextCursorProximity from "@/components/fancy/text/text-cursor-proximity";
 import { InteractiveBattle } from "./interactive-battle";
+import Link from "next/link";
 import { useRef, useState } from "react";
 
 const API_URL = "http://localhost:5200/api";
@@ -103,8 +104,13 @@ export default function Home() {
         <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_20%_15%,rgba(0,21,255,0.18),transparent_38%),radial-gradient(circle_at_78%_18%,rgba(0,21,255,0.12),transparent_42%),radial-gradient(circle_at_50%_90%,rgba(0,21,255,0.08),transparent_45%)]" />
 
         {/* Bento Header */}
-        <div className="mb-8 grid grid-cols-1 gap-4 lg:grid-cols-12 lg:auto-rows-min" ref={heroRef}>
-          <div className={`${bentoCard} relative overflow-hidden lg:col-span-7`}>
+        <div
+          className="mb-8 grid grid-cols-1 gap-4 lg:grid-cols-12 lg:auto-rows-min"
+          ref={heroRef}
+        >
+          <div
+            className={`${bentoCard} relative overflow-hidden lg:col-span-7`}
+          >
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_65%_15%,rgba(0,21,255,0.18),transparent_45%)]" />
             <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.04)_1px,transparent_1px)] bg-[size:40px_40px] opacity-25" />
             <div className="relative">
@@ -134,14 +140,19 @@ export default function Home() {
               </div>
               <p className="mt-4 max-w-xl text-base leading-relaxed text-white/60">
                 Blue-black battle workspace for teambuilding, Elite Four runs,
-                AI-vs-AI simulation, live battle guidance, and practice against an AI trainer.
+                AI-vs-AI simulation, live battle guidance, and practice against
+                an AI trainer.
               </p>
 
               <div className="mt-8 flex flex-wrap gap-2">
                 <button
                   onClick={() => setMode("interactive")}
                   className={tabClass(mode === "interactive")}
-                  style={mode === "interactive" ? { backgroundColor: brandBlue } : undefined}
+                  style={
+                    mode === "interactive"
+                      ? { backgroundColor: brandBlue }
+                      : undefined
+                  }
                 >
                   Interactive Battle
                 </button>
@@ -152,36 +163,19 @@ export default function Home() {
                   Auto Battle Demo
                 </button>
               </div>
-
-              <div className="mt-6 grid gap-2 sm:grid-cols-2">
-                {[
-                  "Teambuilder",
-                  "Battle AI",
-                  "AI vs AI",
-                  "Live AI Trainer Recommendations",
-                ].map((item) => (
-                  <TextCursorProximity
-                    key={item}
-                    className="rounded-lg border border-white/10 bg-black/45 px-3 py-2 text-sm text-white/70"
-                    styles={proximityStyles.details}
-                    falloff="exponential"
-                    radius={75}
-                    containerRef={heroRef}
-                  >
-                    {item}
-                  </TextCursorProximity>
-                ))}
-              </div>
             </div>
           </div>
 
           <div className={`${bentoCard} lg:col-span-5`}>
-            <div className="text-xs tracking-[0.18em] text-white/40">CORE MODES</div>
+            <div className="text-xs tracking-[0.18em] text-white/40">
+              CORE MODES - Click to begin
+            </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               {[
                 {
                   title: "Teambuilder",
                   desc: "Create custom teams and move sets before queueing into battles.",
+                  href: "/teambuilder",
                 },
                 {
                   title: "Battle AI",
@@ -195,32 +189,53 @@ export default function Home() {
                   title: "Live Recommendations",
                   desc: "AI trainer suggestions during battle based on current board state.",
                 },
-              ].map((card, i) => (
-                <div
-                  key={card.title}
-                  className={`rounded-xl border p-4 ${
-                    i === 1 || i === 3
-                      ? "border-white/15"
-                      : "border-white/10 bg-black/35"
-                  }`}
-                  style={i === 1 || i === 3 ? { backgroundColor: "rgba(0,21,255,0.08)" } : undefined}
-                >
-                  <div className="text-sm font-semibold text-white">{card.title}</div>
-                  <p className="mt-2 text-xs leading-relaxed text-white/55">
-                    {card.desc}
-                  </p>
-                </div>
-              ))}
+              ].map((card, i) => {
+                const cardContent = (
+                  <>
+                    <div className="text-sm font-semibold text-white">
+                      {card.title}
+                    </div>
+                    <p className="mt-2 text-xs leading-relaxed text-white/55">
+                      {card.desc}
+                    </p>
+                  </>
+                );
+
+                return (
+                  <div
+                    key={card.title}
+                    className={`rounded-xl border p-4 ${
+                      i === 1 || i === 3
+                        ? "border-white/15"
+                        : "border-white/10 bg-black/35"
+                    }`}
+                    style={
+                      i === 1 || i === 3
+                        ? { backgroundColor: "rgba(0,21,255,0.08)" }
+                        : undefined
+                    }
+                  >
+                    {card.href ? (
+                      <Link href={card.href}>{cardContent}</Link>
+                    ) : (
+                      cardContent
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
 
           <div className={`${bentoCard} lg:col-span-4`}>
-            <div className="text-xs tracking-[0.18em] text-white/40">ELITE FOUR MODE</div>
+            <div className="text-xs tracking-[0.18em] text-white/40">
+              ELITE FOUR MODE
+            </div>
             <div className="mt-3 text-2xl font-semibold tracking-tight text-white">
               Fight Elite 4 • Any Region
             </div>
             <p className="mt-2 text-sm leading-relaxed text-white/55">
-              Planned progression mode with region presets, staged teams, and run tracking.
+              Planned progression mode with region presets, staged teams, and
+              run tracking.
             </p>
             <div className="mt-5 space-y-2">
               {["Kanto", "Johto", "Hoenn", "Sinnoh", "Unova", "Paldea"].map(
@@ -230,7 +245,12 @@ export default function Home() {
                     className="flex items-center justify-between rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
                   >
                     <span className="text-white/75">{region}</span>
-                    <span className="text-xs" style={{ color: "rgba(153, 168, 255, 0.9)" }}>Elite 4 + Champion</span>
+                    <span
+                      className="text-xs"
+                      style={{ color: "rgba(153, 168, 255, 0.9)" }}
+                    >
+                      Elite 4 + Champion
+                    </span>
                   </div>
                 ),
               )}
@@ -260,7 +280,8 @@ export default function Home() {
                   Selected move: Thunderbolt
                 </div>
                 <p className="mt-2 text-sm leading-relaxed text-white/55">
-                  High-confidence neutral hit with KO pressure while preserving safer lines than Focus Blast into a resist pivot.
+                  High-confidence neutral hit with KO pressure while preserving
+                  safer lines than Focus Blast into a resist pivot.
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   {["Model", "Turn 7", "Latency 842ms"].map((badge) => (
@@ -280,7 +301,10 @@ export default function Home() {
                     "linear-gradient(to bottom, rgba(0,21,255,0.10), rgba(0,0,0,1))",
                 }}
               >
-                <div className="text-xs" style={{ color: "rgba(173, 186, 255, 0.95)" }}>
+                <div
+                  className="text-xs"
+                  style={{ color: "rgba(173, 186, 255, 0.95)" }}
+                >
                   Turn Flow
                 </div>
                 <div className="mt-3 space-y-2">
@@ -499,7 +523,6 @@ export default function Home() {
                 </>
               )}
             </div>
-
           </>
         )}
 
