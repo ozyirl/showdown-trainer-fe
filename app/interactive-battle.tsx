@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const API_URL = "http://localhost:5200/api";
 const SEARCH_DEBOUNCE_MS = 300;
@@ -16,6 +16,10 @@ type MoveAcceptedAction = {
 };
 
 type BattlePokemonState = {
+  slot?: number;
+  ident?: string;
+  isActive?: boolean;
+  fainted?: boolean;
   name: string;
   hp: number;
   maxHp: number;
@@ -24,6 +28,8 @@ type BattlePokemonState = {
 };
 
 type BattleMove = {
+  choice?: string;
+  index?: number;
   name: string;
   type: string;
   power: number | null;
@@ -31,17 +37,51 @@ type BattleMove = {
   maxPp: number;
 };
 
+type BattleSwitchOption = {
+  choice: string;
+  slot: number;
+  name: string;
+  hpPercent: number;
+  status: string | null;
+  fainted: boolean;
+  isActive: boolean;
+};
+
+type BattleSideState = {
+  active: BattlePokemonState | null;
+  bench: BattlePokemonState[];
+  team: BattlePokemonState[];
+  faintedCount: number;
+};
+
 type BattleState = {
   battleId: string;
+  sides?: {
+    p1?: BattleSideState;
+    p2?: BattleSideState;
+  };
   p1Pokemon: BattlePokemonState;
   p2Pokemon: BattlePokemonState;
   availableMoves: BattleMove[];
+  availableSwitches?: BattleSwitchOption[];
+  canSwitch?: boolean;
   turnLog: Array<string | MoveAcceptedAction>;
   isEnded: boolean;
   winner: string | null;
   currentTurn: number;
   waitingForMove: boolean;
-  phase?: "awaiting-moves" | "resolving" | "ended" | string;
+  phase?:
+    | "team-preview"
+    | "awaiting-actions"
+    | "awaiting-forced-switch-p1"
+    | "awaiting-forced-switch-p2"
+    | "awaiting-event-ack"
+    | "resolving"
+    | "ended"
+    | string;
+  eventCursor?: number | null;
+  awaitingAckEventSeq?: number | null;
+  recentPlaybackEvents?: unknown[];
   pendingPlayers?: Array<"p1" | "p2"> | string[];
   lastTurnEvents?: unknown[];
   lastCpuDecision?: {
@@ -49,12 +89,36 @@ type BattleState = {
     modelId?: string;
     latencyMs?: number;
     source?: "model" | "fallback" | string;
+    choice?: string;
+    actionType?: string;
     moveName?: string;
     reasoning?: string;
     rawResponse?: unknown;
     error?: string;
   } | null;
   lastAction?: string | MoveAcceptedAction | null;
+};
+
+type ActionSubmitError = {
+  message: string;
+  status?: number;
+  legalChoices?: string[];
+  legalMoves?: string[];
+  legalSwitches?: string[];
+};
+
+type PlaybackEvent = {
+  seq: number;
+  turn: number;
+  type: string;
+  text: string;
+  payload: unknown;
+  timestamp: number;
+};
+
+type TurnLogGroup = {
+  turn: number;
+  events: PlaybackEvent[];
 };
 
 type PokemonSearchItem = {
@@ -92,6 +156,9 @@ type SideSetup = {
 };
 
 type BattleSetupState = {
+  randomTeams: boolean;
+  randomTeamFormatid: string;
+  randomSeedInput: string;
   p1: SideSetup;
   p2: SideSetup;
   level: number;
@@ -233,6 +300,56 @@ async function fetchBattleState(battleId: string): Promise<BattleState> {
   return fetchJson<BattleState>(`${API_URL}/battle/${battleId}/state`);
 }
 
+async function fetchBattleEvents(params: {
+  battleId: string;
+  afterSeq: number;
+  limit?: number;
+}): Promise<PlaybackEvent[]> {
+  const payload = await fetchJson<unknown>(
+    `${API_URL}/battle/${params.battleId}/events?afterSeq=${params.afterSeq}&limit=${params.limit ?? 100}`,
+  );
+  const rawEvents = Array.isArray(payload)
+    ? payload
+    : Array.isArray((payload as { events?: unknown[] })?.events)
+      ? (payload as { events: unknown[] }).events
+      : [];
+
+  const out: PlaybackEvent[] = [];
+  for (const rawEvent of rawEvents) {
+    const normalized = normalizePlaybackEvent(rawEvent);
+    if (normalized) out.push(normalized);
+  }
+  return out.sort((a, b) => a.seq - b.seq);
+}
+
+async function postBattleAck(params: { battleId: string; eventSeq: number }) {
+  const response = await fetch(`${API_URL}/battle/${params.battleId}/ack`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ eventSeq: params.eventSeq }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    const error = new Error(text || `Ack failed (${response.status})`);
+    (error as Error & { status?: number }).status = response.status;
+    throw error;
+  }
+}
+
+async function postBattleContinue(params: { battleId: string }) {
+  const response = await fetch(`${API_URL}/battle/${params.battleId}/continue`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    const error = new Error(text || `Continue failed (${response.status})`);
+    (error as Error & { status?: number }).status = response.status;
+    throw error;
+  }
+  return response.json().catch(() => null);
+}
+
 async function postBattleMove(params: {
   battleId: string;
   player: "p1" | "p2";
@@ -251,6 +368,159 @@ async function postBattleMove(params: {
     const body = await response.text().catch(() => "");
     const error = new Error(body || `Move submit failed (${response.status})`);
     (error as Error & { status?: number }).status = response.status;
+    throw error;
+  }
+
+  return response.json() as Promise<BattleState>;
+}
+
+function normalizePlaybackEvent(raw: unknown): PlaybackEvent | null {
+  if (!raw || typeof raw !== "object") return null;
+  const data = raw as Record<string, unknown>;
+  const seq = Number(data.seq);
+  if (!Number.isFinite(seq)) return null;
+  const type = String(data.type ?? data.kind ?? "event");
+  const turnValue = Number(data.turn);
+  const timestamp =
+    typeof data.timestamp === "number"
+      ? data.timestamp
+      : typeof data.ts === "number"
+        ? data.ts
+        : Date.now();
+
+  const text = extractReadableEventText(data, type, seq);
+
+  return {
+    seq,
+    turn: Number.isFinite(turnValue) ? turnValue : 0,
+    type,
+    text,
+    payload: raw,
+    timestamp,
+  };
+}
+
+function extractReadableEventText(
+  data: Record<string, unknown>,
+  type: string,
+  seq: number,
+) {
+  const readFromObject = (obj: Record<string, unknown> | null | undefined) => {
+    if (!obj) return null;
+    const textFields = [
+      "text",
+      "display",
+      "message",
+      "summary",
+      "logLine",
+      "description",
+    ];
+    for (const field of textFields) {
+      const value = obj[field];
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+    return null;
+  };
+
+  const directText = readFromObject(data);
+  if (directText) return directText;
+
+  const payload =
+    data.payload && typeof data.payload === "object"
+      ? (data.payload as Record<string, unknown>)
+      : null;
+  const payloadText = readFromObject(payload);
+  if (payloadText) return payloadText;
+
+  const details =
+    payload?.details && typeof payload.details === "object"
+      ? (payload.details as Record<string, unknown>)
+      : null;
+  const detailsText = readFromObject(details);
+  if (detailsText) return detailsText;
+
+  const actor =
+    typeof data.actor === "string"
+      ? data.actor
+      : typeof payload?.actor === "string"
+        ? payload.actor
+        : null;
+  const moveName =
+    typeof data.moveName === "string"
+      ? data.moveName
+      : typeof payload?.moveName === "string"
+        ? payload.moveName
+        : typeof payload?.move === "string"
+          ? payload.move
+          : null;
+  if (moveName && actor) return `${actor} used ${moveName}!`;
+  if (moveName) return `Used ${moveName}!`;
+
+  const reason =
+    typeof data.reason === "string"
+      ? data.reason
+      : typeof payload?.reason === "string"
+        ? payload.reason
+        : null;
+  if (reason?.trim()) return reason.trim();
+
+  return `${type}#${seq}`;
+}
+
+async function postBattleAction(params: {
+  battleId: string;
+  player: "p1" | "p2";
+  choice?: string;
+  moveIndex?: number;
+}) {
+  const response = await fetch(`${API_URL}/battle/${params.battleId}/action`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      player: params.player,
+      ...(params.choice ? { choice: params.choice } : {}),
+      ...(typeof params.moveIndex === "number"
+        ? { moveIndex: params.moveIndex }
+        : {}),
+    }),
+  });
+
+  if (!response.ok) {
+    let payload: unknown = null;
+    try {
+      payload = await response.json();
+    } catch {
+      const txt = await response.text().catch(() => "");
+      payload = txt || null;
+    }
+    const data = payload as Record<string, unknown> | null;
+    const legalChoices =
+      Array.isArray(data?.legalChoices) && data?.legalChoices
+        ? data.legalChoices.map((value) => String(value))
+        : Array.isArray(data?.legalOptions) && data?.legalOptions
+          ? data.legalOptions.map((value) => String(value))
+          : undefined;
+    const legalMoves =
+      Array.isArray(data?.legalMoves) && data?.legalMoves
+        ? data.legalMoves.map((value) => String(value))
+        : undefined;
+    const legalSwitches =
+      Array.isArray(data?.legalSwitches) && data?.legalSwitches
+        ? data.legalSwitches.map((value) => String(value))
+        : undefined;
+    const message =
+      typeof data?.message === "string"
+        ? data.message
+        : typeof payload === "string"
+          ? payload
+          : `Action submit failed (${response.status})`;
+    const error = new Error(message) as Error & ActionSubmitError;
+    error.status = response.status;
+    error.legalChoices = legalChoices;
+    error.legalMoves = legalMoves;
+    error.legalSwitches = legalSwitches;
     throw error;
   }
 
@@ -521,7 +791,14 @@ function canPlayerAct(state: BattleState | null, isSubmitting: boolean) {
   if (!state || isSubmitting || state.isEnded || state.phase === "ended") {
     return false;
   }
-  if (state.phase && state.phase !== "awaiting-moves") return false;
+  if (state.awaitingAckEventSeq != null) return false;
+  if (
+    state.phase &&
+    state.phase !== "awaiting-actions" &&
+    state.phase !== "team-preview" &&
+    state.phase !== "awaiting-forced-switch-p1"
+  )
+    return false;
   if (Array.isArray(state.pendingPlayers)) {
     return state.pendingPlayers.includes("p1");
   }
@@ -530,6 +807,10 @@ function canPlayerAct(state: BattleState | null, isSubmitting: boolean) {
 
 function sideNeedsMove(state: BattleState | null, player: "p1" | "p2") {
   if (!state || state.isEnded || state.phase === "ended") return false;
+  if (player === "p1" && state.phase === "awaiting-forced-switch-p1")
+    return true;
+  if (player === "p2" && state.phase === "awaiting-forced-switch-p2")
+    return true;
   if (Array.isArray(state.pendingPlayers))
     return state.pendingPlayers.includes(player);
   if (player === "p1") return state.waitingForMove;
@@ -538,31 +819,45 @@ function sideNeedsMove(state: BattleState | null, player: "p1" | "p2") {
 
 function deriveStatusText(params: {
   state: BattleState | null;
-  pendingMoveName: string | null;
+  pendingActionLabel: string | null;
   isSubmitting: boolean;
   errorMessage: string | null;
 }) {
-  const { state, pendingMoveName, isSubmitting, errorMessage } = params;
+  const { state, pendingActionLabel, isSubmitting, errorMessage } = params;
 
   if (errorMessage) return `Error: ${errorMessage}`;
   if (!state) return "Loading battle state...";
   if (state.isEnded || state.phase === "ended") {
     return state.winner ? `${state.winner} wins.` : "Battle ended.";
   }
-  if (isSubmitting && pendingMoveName) {
-    return `CPU is choosing a move... (${pendingMoveName} selected)`;
+  if (isSubmitting && pendingActionLabel) {
+    return `CPU is choosing an action... (${pendingActionLabel} selected)`;
   }
-  if (isSubmitting) return "CPU is choosing a move...";
+  if (isSubmitting) return "CPU is choosing an action...";
+  if (state.awaitingAckEventSeq != null || state.phase === "awaiting-event-ack") {
+    return `Playing event #${state.awaitingAckEventSeq ?? "?"}...`;
+  }
+  if (state.phase === "team-preview") return "Choose team order (e.g. 123456).";
   if (state.phase === "resolving") return "Resolving turn...";
+  if (state.phase === "awaiting-forced-switch-p1")
+    return "Forced switch: choose your next Pokémon.";
+  if (state.phase === "awaiting-forced-switch-p2")
+    return "Opponent must switch. Continuing...";
+  const hasMoves = state.availableMoves.length > 0;
+  const hasSwitches = (state.availableSwitches?.length ?? 0) > 0;
+  if (sideNeedsMove(state, "p1") && !hasMoves && hasSwitches) {
+    return "Forced switch: choose a Pokémon to switch in.";
+  }
   if (
     state.phase &&
-    state.phase !== "awaiting-moves" &&
+    state.phase !== "awaiting-actions" &&
+    state.phase !== "team-preview" &&
     !sideNeedsMove(state, "p1")
   ) {
     return "Waiting for forced action / recharge resolution...";
   }
   if (sideNeedsMove(state, "p2")) return "Waiting for opponent...";
-  if (sideNeedsMove(state, "p1")) return "Choose your move.";
+  if (sideNeedsMove(state, "p1")) return "Choose your action.";
   return formatLastAction(state.lastAction) ?? "Battle in progress...";
 }
 
@@ -579,6 +874,44 @@ function hpPercent(hp: number, maxHp: number) {
 
 function typeChipText(types: string[]) {
   return types.length ? types.join(" / ") : "Unknown type";
+}
+
+function mergePlaybackEvents(
+  previous: PlaybackEvent[],
+  next: PlaybackEvent[],
+): PlaybackEvent[] {
+  if (!next.length) return previous;
+  const map = new Map<number, PlaybackEvent>();
+  for (const event of previous) map.set(event.seq, event);
+  for (const event of next) map.set(event.seq, event);
+  return Array.from(map.values()).sort((a, b) => a.seq - b.seq);
+}
+
+function isBlockingEventType(type: string) {
+  const upper = type.toUpperCase();
+  return (
+    upper.includes("FAINT") ||
+    upper.includes("REQUEST_SWITCH") ||
+    upper.includes("REQUEST_MOVE") ||
+    upper.includes("TURN_END")
+  );
+}
+
+function buildTurnLogGroups(events: PlaybackEvent[]): TurnLogGroup[] {
+  const groups: TurnLogGroup[] = [];
+  const groupByTurn = new Map<number, TurnLogGroup>();
+  for (const event of events) {
+    const turn = event.turn > 0 ? event.turn : 0;
+    const existing = groupByTurn.get(turn);
+    if (existing) {
+      existing.events.push(event);
+      continue;
+    }
+    const created: TurnLogGroup = { turn, events: [event] };
+    groupByTurn.set(turn, created);
+    groups.push(created);
+  }
+  return groups.sort((a, b) => a.turn - b.turn);
 }
 
 function MoveSelector(params: {
@@ -837,49 +1170,73 @@ function PokemonSetupPanel(params: {
 function BattleArena(params: {
   battleState: BattleState;
   visualHpPercents: { p1: number; p2: number } | null;
-  displayedLogLines: string[];
-  isTurnAnimating: boolean;
+  isPlaybackRunning: boolean;
   isSubmittingMove: boolean;
   statusText: string;
   moveSubmitPending: boolean;
   moveSubmitError: string | null;
-  onSubmitMove: (moveIndexOneBased: number, moveName: string) => void;
+  legalOptionsMessage: string | null;
+  turnLogGroups: TurnLogGroup[];
+  lastAckedSeq: number;
+  awaitingAckEventSeq: number | null;
+  collapsedTurns: Record<number, boolean>;
+  playbackError: string | null;
+  onToggleTurnCollapse: (turn: number) => void;
+  onSubmitAction: (params: {
+    choice: string;
+    label: string;
+    moveIndex?: number;
+  }) => void;
+  onContinue: () => void;
+  continuePending: boolean;
   onLeaveBattle: () => void;
 }) {
   const {
     battleState,
     visualHpPercents,
-    displayedLogLines,
-    isTurnAnimating,
+    isPlaybackRunning,
     isSubmittingMove,
     statusText,
     moveSubmitPending,
     moveSubmitError,
-    onSubmitMove,
+    legalOptionsMessage,
+    turnLogGroups,
+    lastAckedSeq,
+    awaitingAckEventSeq,
+    collapsedTurns,
+    playbackError,
+    onToggleTurnCollapse,
+    onSubmitAction,
+    onContinue,
+    continuePending,
     onLeaveBattle,
   } = params;
+  const [teamOrder, setTeamOrder] = useState("123456");
+  const loggerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!loggerRef.current) return;
+    loggerRef.current.scrollTop = loggerRef.current.scrollHeight;
+  }, [turnLogGroups]);
 
   const playerCanAct =
     canPlayerAct(battleState, moveSubmitPending || isSubmittingMove) &&
-    !isTurnAnimating;
+    !isPlaybackRunning;
+  const forcedSwitchForP1 = battleState.phase === "awaiting-forced-switch-p1";
   const currentHpPercents = {
     p1:
-      isTurnAnimating && visualHpPercents
+      isPlaybackRunning && visualHpPercents
         ? visualHpPercents.p1
         : hpPercentFromStatePokemon(battleState.p1Pokemon),
     p2:
-      isTurnAnimating && visualHpPercents
+      isPlaybackRunning && visualHpPercents
         ? visualHpPercents.p2
         : hpPercentFromStatePokemon(battleState.p2Pokemon),
   };
   const cpuReasoning = extractCpuReasoningText(battleState.lastCpuDecision);
-  const parsedCpuRaw =
-    typeof battleState.lastCpuDecision?.rawResponse === "string"
-      ? parseCpuDecisionRawResponse(battleState.lastCpuDecision.rawResponse)
-      : null;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4 backdrop-blur">
         <div>
           <div className="text-xs tracking-wide text-white/45">BATTLE</div>
@@ -906,167 +1263,193 @@ function BattleArena(params: {
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        {[
-          {
-            key: "p1" as const,
-            label: "Your Pokémon",
-            p: battleState.p1Pokemon,
-          },
-          {
-            key: "p2" as const,
-            label: "Opponent",
-            p: battleState.p2Pokemon,
-          },
-        ].map(({ key, label, p }) => (
-          <div key={label} className={panelClass}>
-            <div className="mb-4 text-sm font-medium text-white/60">
-              {label}
-            </div>
-            <div className="flex flex-col items-center gap-4">
-              <img
-                src={`https://play.pokemonshowdown.com/sprites/gen5ani/${p.name.toLowerCase()}.gif`}
-                alt={p.name}
-                className="h-32 w-32 object-contain"
-                onError={(e) => {
-                  e.currentTarget.src = `https://play.pokemonshowdown.com/sprites/gen5/${p.name.toLowerCase()}.png`;
-                }}
-              />
-              <div className="text-2xl font-semibold tracking-tight text-white">
-                {p.name}
-              </div>
-              <div className="w-full space-y-1">
-                <div className="flex justify-between text-xs text-white/60">
-                  <span>HP</span>
-                  <span>{currentHpPercents[key]}%</span>
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            {[
+              {
+                key: "p1" as const,
+                label: "Your Pokémon",
+                p: battleState.p1Pokemon,
+              },
+              {
+                key: "p2" as const,
+                label: "Opponent",
+                p: battleState.p2Pokemon,
+              },
+            ].map(({ key, label, p }) => (
+              <div key={label} className={panelClass}>
+                <div className="mb-3 text-sm font-medium text-white/60">
+                  {label}
                 </div>
-                <div className="h-3 w-full rounded-full bg-white/10">
-                  <div
-                    className={`h-3 rounded-full transition-all duration-500 ${getHpBarClass(
-                      currentHpPercents[key],
-                    )}`}
-                    style={{
-                      width: `${currentHpPercents[key]}%`,
+                <div className="flex items-center gap-3">
+                  <img
+                    src={`https://play.pokemonshowdown.com/sprites/gen5ani/${p.name.toLowerCase()}.gif`}
+                    alt={p.name}
+                    className="h-20 w-20 object-contain"
+                    onError={(e) => {
+                      e.currentTarget.src = `https://play.pokemonshowdown.com/sprites/gen5/${p.name.toLowerCase()}.png`;
                     }}
                   />
-                </div>
-                {p.status && (
-                  <div className="text-xs uppercase tracking-wide text-white/45">
-                    Status: {p.status}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        ))}
-
-        <div className={panelClass}>
-          <div className="mb-4 text-sm font-medium text-white/70">
-            CPU Analysis
-          </div>
-          {battleState.lastCpuDecision ? (
-            <div className="space-y-3 text-sm">
-              <div className="grid grid-cols-2 gap-2 text-xs text-white/55">
-                <div>
-                  Turn:{" "}
-                  {battleState.lastCpuDecision.turn ?? battleState.currentTurn}
-                </div>
-                <div>
-                  Source: {battleState.lastCpuDecision.source ?? "unknown"}
-                </div>
-                <div className="col-span-2 truncate">
-                  Model: {battleState.lastCpuDecision.modelId ?? "n/a"}
-                </div>
-                <div>
-                  Latency:{" "}
-                  {typeof battleState.lastCpuDecision.latencyMs === "number"
-                    ? `${battleState.lastCpuDecision.latencyMs}ms`
-                    : "n/a"}
-                </div>
-                <div>
-                  {battleState.lastCpuDecision.error ? "Warning" : "Status"}:{" "}
-                  {battleState.lastCpuDecision.error ? "fallback/error" : "ok"}
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] text-white/65">
-                  {battleState.lastCpuDecision.source === "fallback"
-                    ? "Fallback"
-                    : "Model"}
-                </span>
-                {typeof battleState.lastCpuDecision.latencyMs === "number" &&
-                  battleState.lastCpuDecision.latencyMs > 2000 && (
-                    <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] text-white/65">
-                      Slow
-                    </span>
-                  )}
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/40 p-3">
-                <div className="text-xs text-white/45">Selected move</div>
-                <div className="mt-1 font-medium text-white">
-                  {battleState.lastCpuDecision.moveName ??
-                    parsedCpuRaw?.moveName ??
-                    "Unknown"}
-                </div>
-              </div>
-              {cpuReasoning && (
-                <div className="rounded-lg border border-white/10 bg-black/40 p-3">
-                  <div className="mb-1 text-xs text-white/45">Reasoning</div>
-                  <div className="line-clamp-6 whitespace-pre-wrap text-xs leading-relaxed text-white/70">
-                    {cpuReasoning}
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <div className="truncate text-lg font-semibold tracking-tight text-white">
+                      {p.name}
+                    </div>
+                    <div className="flex justify-between text-xs text-white/60">
+                      <span>HP</span>
+                      <span>{currentHpPercents[key]}%</span>
+                    </div>
+                    <div className="h-2.5 w-full rounded-full bg-white/10">
+                      <div
+                        className={`h-2.5 rounded-full transition-all duration-500 ${getHpBarClass(
+                          currentHpPercents[key],
+                        )}`}
+                        style={{ width: `${currentHpPercents[key]}%` }}
+                      />
+                    </div>
                   </div>
                 </div>
-              )}
-              {(battleState.lastCpuDecision.source === "fallback" ||
-                battleState.lastCpuDecision.error) && (
-                <div className="rounded-md border border-white/10 bg-white/[0.02] px-2.5 py-2 text-xs text-white/60">
-                  CPU used fallback logic
-                  {battleState.lastCpuDecision.error
-                    ? `: ${battleState.lastCpuDecision.error}`
-                    : "."}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="text-sm text-white/50">
-              No CPU decision data yet.
-            </div>
-          )}
-        </div>
-      </div>
-
-      {!battleState.isEnded && (
-        <div className={panelClass}>
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <h3 className="text-sm font-medium tracking-wide text-white/70">
-              Choose Your Move
-            </h3>
-            <div className="text-xs text-white/45">
-              {playerCanAct ? "Your turn" : "Move input locked"}
-            </div>
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {battleState.availableMoves.map((move, index) => (
-              <button
-                key={`${move.name}-${index}`}
-                type="button"
-                onClick={() => onSubmitMove(index + 1, move.name)}
-                disabled={!playerCanAct}
-                className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 text-left transition-colors hover:border-white/20 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <div className="text-sm font-medium tracking-tight text-white">
-                  {move.name}
-                </div>
-                <div className="mt-1 text-xs text-white/55">
-                  {move.type}
-                  {move.power ? ` • Power ${move.power}` : ""}
-                </div>
-                <div className="mt-1 text-xs text-white/40">
-                  PP {move.pp}/{move.maxPp}
-                </div>
-              </button>
+              </div>
             ))}
           </div>
+
+          {!battleState.isEnded && (
+            <div className={panelClass}>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h3 className="text-sm font-medium tracking-wide text-white/70">
+              Choose Your Action
+            </h3>
+            <div className="text-xs text-white/45">
+              {playerCanAct ? "Your turn" : "Input locked"}
+            </div>
+          </div>
+          {battleState.phase === "team-preview" ? (
+            <div className="space-y-3">
+              <div className="text-xs text-white/55">
+                Submit your team order (digits 1-6, each once).
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={teamOrder}
+                  onChange={(e) =>
+                    setTeamOrder(e.target.value.replace(/[^1-6]/g, "").slice(0, 6))
+                  }
+                  placeholder="123456"
+                  className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    onSubmitAction({
+                      choice: `team ${teamOrder || "123456"}`,
+                      label: `team ${teamOrder || "123456"}`,
+                    })
+                  }
+                  disabled={!playerCanAct}
+                  className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/80 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Confirm Team Order
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {!forcedSwitchForP1 && battleState.availableMoves.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-xs uppercase tracking-wide text-white/45">
+                    Moves
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {battleState.availableMoves.map((move, index) => {
+                      const choice = move.choice ?? `move ${move.index ?? index + 1}`;
+                      const moveIndex = move.index ?? index + 1;
+                      return (
+                        <button
+                          key={`${move.name}-${index}`}
+                          type="button"
+                          onClick={() =>
+                            onSubmitAction({
+                              choice,
+                              label: move.name,
+                              moveIndex,
+                            })
+                          }
+                          disabled={!playerCanAct}
+                          className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 text-left transition-colors hover:border-white/20 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <div className="text-sm font-medium tracking-tight text-white">
+                            {move.name}
+                          </div>
+                          <div className="mt-1 text-xs text-white/55">
+                            {move.type}
+                            {move.power ? ` • Power ${move.power}` : ""}
+                          </div>
+                          <div className="mt-1 text-xs text-white/40">
+                            PP {move.pp}/{move.maxPp}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {(battleState.availableSwitches?.length ?? 0) > 0 && (
+                <div className="space-y-2">
+                  <div className="text-xs uppercase tracking-wide text-white/45">
+                    Switch
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {battleState.availableSwitches?.map((option) => (
+                      <button
+                        key={option.choice}
+                        type="button"
+                        onClick={() =>
+                          onSubmitAction({
+                            choice: option.choice,
+                            label: `switch ${option.name}`,
+                          })
+                        }
+                        disabled={!playerCanAct}
+                        className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 text-left transition-colors hover:border-white/20 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <div className="text-sm font-medium tracking-tight text-white">
+                          {option.name}
+                        </div>
+                        <div className="mt-1 text-xs text-white/55">
+                          HP {option.hpPercent}%{option.status ? ` • ${option.status}` : ""}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!forcedSwitchForP1 &&
+                battleState.availableMoves.length === 0 &&
+                (battleState.availableSwitches?.length ?? 0) === 0 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onSubmitAction({ choice: "default", label: "default" })
+                    }
+                    disabled={!playerCanAct}
+                    className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/80 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Submit Default Action
+                  </button>
+                )}
+              {battleState.phase === "awaiting-forced-switch-p2" &&
+                battleState.awaitingAckEventSeq == null && (
+                  <button
+                    type="button"
+                    onClick={onContinue}
+                    disabled={continuePending || moveSubmitPending || isSubmittingMove}
+                    className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/80 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {continuePending ? "Continuing..." : "Continue"}
+                  </button>
+                )}
+            </div>
+          )}
           <div className="mt-4 rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/70">
             {statusText}
           </div>
@@ -1075,19 +1458,103 @@ function BattleArena(params: {
               {moveSubmitError}
             </div>
           )}
+          {legalOptionsMessage && (
+            <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-xs text-white/60">
+              {legalOptionsMessage}
+            </div>
+          )}
         </div>
       )}
 
-      <div className={panelClass}>
-        <h3 className="mb-4 text-sm font-medium tracking-wide text-white/70">
-          Battle Log
-        </h3>
-        <div className="max-h-72 overflow-y-auto rounded-xl border border-white/10 bg-black/50 p-4">
-          <div className="space-y-1 font-mono text-sm text-white/80">
-            <div>Battle started!</div>
-            {displayedLogLines.map((line, index) => (
-              <div key={`${index}-${line}`}>{line}</div>
-            ))}
+        <div className={`${panelClass} space-y-3`}>
+          <div className="text-sm font-medium text-white/70">CPU Analysis</div>
+          {battleState.lastCpuDecision ? (
+            <>
+              <div className="grid grid-cols-2 gap-2 text-xs text-white/55">
+                <div>Source: {battleState.lastCpuDecision.source ?? "unknown"}</div>
+                <div>
+                  Latency:{" "}
+                  {typeof battleState.lastCpuDecision.latencyMs === "number"
+                    ? `${battleState.lastCpuDecision.latencyMs}ms`
+                    : "n/a"}
+                </div>
+                <div className="col-span-2 truncate">
+                  Choice: {battleState.lastCpuDecision.choice ?? "n/a"}
+                </div>
+                <div className="col-span-2">
+                  Type: {battleState.lastCpuDecision.actionType ?? "unknown"}
+                </div>
+              </div>
+              {cpuReasoning && (
+                <div className="rounded-lg border border-white/10 bg-black/40 p-3 text-xs text-white/70">
+                  {cpuReasoning}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-sm text-white/50">No CPU decision data yet.</div>
+          )}
+        </div>
+      </div>
+
+        <div className={`${panelClass} flex h-[72vh] flex-col`}>
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-medium tracking-wide text-white/70">
+              Turn Logger
+            </h3>
+            <div className="text-xs text-white/50">
+              Acked: {lastAckedSeq}
+              {awaitingAckEventSeq != null ? ` • Pending: ${awaitingAckEventSeq}` : ""}
+            </div>
+          </div>
+          {playbackError && (
+            <div className="mb-3 rounded-md border border-white/10 bg-white/[0.02] px-2.5 py-2 text-xs text-white/65">
+              {playbackError}
+            </div>
+          )}
+          <div
+            ref={loggerRef}
+            className="flex-1 overflow-y-auto rounded-xl border border-white/10 bg-black/50 p-3"
+          >
+            <div className="space-y-4">
+              {turnLogGroups
+                .filter((group) => group.turn <= 0)
+                .flatMap((group) => group.events)
+                .map((event) => (
+                  <div key={`opening-${event.seq}`} className="text-sm leading-relaxed text-white/85">
+                    {event.text}
+                  </div>
+                ))}
+
+              {turnLogGroups
+                .filter((group) => group.turn > 0)
+                .map((group) => (
+                  <section key={`turn-${group.turn}`} className="border-t border-white/10 pt-2">
+                    <div className="mb-2 text-xl font-bold text-white">
+                      Turn {group.turn}
+                    </div>
+                    <div className="space-y-1.5">
+                      {group.events.map((event) => (
+                        <div
+                          key={event.seq}
+                          className={`text-sm leading-relaxed ${
+                            awaitingAckEventSeq === event.seq
+                              ? "text-white"
+                              : event.seq <= lastAckedSeq
+                                ? "text-white/85"
+                                : "text-white/60"
+                          }`}
+                        >
+                          {event.text}
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              {turnLogGroups.length === 0 && (
+                <div className="text-sm text-white/50">No events yet.</div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -1101,6 +1568,9 @@ export function InteractiveBattle({
   const router = useRouter();
   const pathname = usePathname();
   const [setup, setSetup] = useState<BattleSetupState>({
+    randomTeams: true,
+    randomTeamFormatid: "gen9randombattle",
+    randomSeedInput: "",
     p1: {
       query: "",
       selectedPokemon: null,
@@ -1114,24 +1584,36 @@ export function InteractiveBattle({
       autoMoves: true,
     },
     level: 100,
-    formatid: "gen9ou",
+    formatid: "gen9customgame",
   });
   const [battleId, setBattleId] = useState<string | null>(initialBattleId);
   const [battleStateSnapshot, setBattleStateSnapshot] =
     useState<BattleState | null>(null);
   const [moveUiError, setMoveUiError] = useState<string | null>(null);
-  const [pendingMoveName, setPendingMoveName] = useState<string | null>(null);
-  const [displayedLogLines, setDisplayedLogLines] = useState<string[]>([]);
+  const [pendingActionLabel, setPendingActionLabel] = useState<string | null>(
+    null,
+  );
+  const [legalOptionsMessage, setLegalOptionsMessage] = useState<string | null>(
+    null,
+  );
+  const [playbackEvents, setPlaybackEvents] = useState<PlaybackEvent[]>([]);
+  const [lastSeenSeq, setLastSeenSeq] = useState(0);
+  const [lastAckedSeq, setLastAckedSeq] = useState(0);
+  const [collapsedTurns, setCollapsedTurns] = useState<Record<number, boolean>>(
+    {},
+  );
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [visualHpPercents, setVisualHpPercents] = useState<{
     p1: number;
     p2: number;
   } | null>(null);
-  const [isTurnAnimating, setIsTurnAnimating] = useState(false);
-  const [animatedStatusText, setAnimatedStatusText] = useState<string | null>(
-    null,
-  );
+  const [isPlaybackRunning, setIsPlaybackRunning] = useState(false);
+  const [animatedStatusText, setAnimatedStatusText] = useState<string | null>(null);
   const [isSubmittingMove, setIsSubmittingMove] = useState(false);
   const isSubmittingMoveRef = useRef(false);
+  const isPlaybackBusyRef = useRef(false);
+  const lastContinueAtRef = useRef(0);
+  const playbackEventsRef = useRef<PlaybackEvent[]>([]);
 
   const p1SearchDebounced = useDebouncedValue(
     setup.p1.query.trim(),
@@ -1231,11 +1713,15 @@ export function InteractiveBattle({
       if (!battleId) return false;
       if (!state) return 1200;
       if (state.isEnded || state.phase === "ended") return false;
+      if (state.awaitingAckEventSeq != null || state.phase === "awaiting-event-ack")
+        return 250;
       if (state.phase === "resolving") return 700;
+      if (state.phase === "awaiting-forced-switch-p2") return 500;
       if (sideNeedsMove(state, "p2")) return 900;
       return 1200;
     },
   });
+  const refetchBattleState = stateQuery.refetch;
 
   const liveBattleState = stateQuery.data ?? battleStateSnapshot;
   const p1RecommendedMoves = p1MovesQuery.data?.recommendedMoves ?? [];
@@ -1257,11 +1743,39 @@ export function InteractiveBattle({
 
   const startBattleMutation = useMutation({
     mutationFn: async () => {
+      const parsedSeed = setup.randomSeedInput
+        .split(",")
+        .map((part) => Number.parseInt(part.trim(), 10))
+        .filter((num) => Number.isFinite(num));
+      const randomSeed =
+        parsedSeed.length >= 4 ? parsedSeed.slice(0, 4) : undefined;
+
       const body = {
-        p1Pokemon: setup.p1.selectedPokemon?.name,
-        p2Pokemon: setup.p2.selectedPokemon?.name,
-        p1Moves: p1ResolvedAutoMoves ? undefined : p1ResolvedSelectedMoves,
-        p2Moves: p2ResolvedAutoMoves ? undefined : p2ResolvedSelectedMoves,
+        randomTeams: setup.randomTeams,
+        randomTeamFormatid: setup.randomTeamFormatid || "gen9randombattle",
+        randomSeed,
+        p1Team: setup.randomTeams
+          ? []
+          : setup.p1.selectedPokemon
+            ? [
+                {
+                  species: setup.p1.selectedPokemon.name,
+                  ...(p1ResolvedAutoMoves ? {} : { moves: p1ResolvedSelectedMoves }),
+                  level: setup.level,
+                },
+              ]
+            : [],
+        p2Team: setup.randomTeams
+          ? []
+          : setup.p2.selectedPokemon
+            ? [
+                {
+                  species: setup.p2.selectedPokemon.name,
+                  ...(p2ResolvedAutoMoves ? {} : { moves: p2ResolvedSelectedMoves }),
+                  level: setup.level,
+                },
+              ]
+            : [],
         level: setup.level,
         formatid: setup.formatid,
       };
@@ -1286,42 +1800,56 @@ export function InteractiveBattle({
       }
       setBattleStateSnapshot(state);
       setMoveUiError(null);
-      setPendingMoveName(null);
-      setDisplayedLogLines([]);
+      setPendingActionLabel(null);
+      setLegalOptionsMessage(null);
+      setPlaybackEvents([]);
+      setLastSeenSeq(0);
+      setLastAckedSeq(0);
+      setCollapsedTurns({});
+      setPlaybackError(null);
       setVisualHpPercents({
         p1: hpPercentFromStatePokemon(state.p1Pokemon),
         p2: hpPercentFromStatePokemon(state.p2Pokemon),
       });
-      setIsTurnAnimating(false);
+      setIsPlaybackRunning(false);
       setAnimatedStatusText(null);
       setIsSubmittingMove(false);
       isSubmittingMoveRef.current = false;
+      isPlaybackBusyRef.current = false;
+      lastContinueAtRef.current = 0;
     },
   });
 
-  const submitMoveMutation = useMutation({
+  const submitActionMutation = useMutation({
     mutationFn: async ({
-      moveIndexOneBased,
-      moveName,
+      choice,
+      moveIndex,
+      actionLabel,
     }: {
-      moveIndexOneBased: number;
-      moveName: string;
+      choice: string;
+      moveIndex?: number;
+      actionLabel: string;
     }) => {
       if (!battleId) throw new Error("No active battle");
+      if (liveBattleState?.awaitingAckEventSeq != null) {
+        throw new Error("Playback in progress. Wait for event ACK.");
+      }
 
       const stateBeforeTurn = liveBattleState ?? battleStateSnapshot;
 
       setMoveUiError(null);
-      setPendingMoveName(moveName);
-      setAnimatedStatusText(`Move selected: ${moveName}`);
+      setLegalOptionsMessage(null);
+      setPendingActionLabel(actionLabel);
+      setAnimatedStatusText(`Action selected: ${actionLabel}`);
       setIsSubmittingMove(true);
       isSubmittingMoveRef.current = true;
 
       try {
-        const resolvedState = await postBattleMove({
+        const resolvedState = await postBattleAction({
           battleId,
           player: "p1",
-          moveIndex: moveIndexOneBased,
+          choice,
+          moveIndex,
         });
         return {
           resolvedState,
@@ -1329,7 +1857,8 @@ export function InteractiveBattle({
           recoveredFromConflict: false,
         };
       } catch (error) {
-        const status = (error as Error & { status?: number }).status;
+        const actionError = error as Error & ActionSubmitError;
+        const status = actionError.status;
         if (status !== 400 && status !== 409) throw error;
 
         const recoveredState = await fetchBattleState(battleId);
@@ -1347,9 +1876,25 @@ export function InteractiveBattle({
           throw err;
         }
 
+        if (actionError.legalChoices?.length) {
+          setLegalOptionsMessage(
+            `Legal actions now: ${actionError.legalChoices.join(", ")}`,
+          );
+        } else if (
+          (actionError.legalMoves?.length ?? 0) > 0 ||
+          (actionError.legalSwitches?.length ?? 0) > 0
+        ) {
+          const legal = [
+            ...(actionError.legalMoves?.map((m) => `move ${m}`) ?? []),
+            ...(actionError.legalSwitches?.map((s) => `switch ${s}`) ?? []),
+          ];
+          setLegalOptionsMessage(`Legal actions now: ${legal.join(", ")}`);
+        }
+
         if (sideNeedsMove(recoveredState, "p1")) {
           const err = new Error(
-            "That move is no longer legal this turn. Please choose again.",
+            actionError.message ||
+              "That action is no longer legal this turn. Please choose again.",
           );
           (err as Error & { status?: number }).status = 400;
           throw err;
@@ -1362,71 +1907,25 @@ export function InteractiveBattle({
         };
       }
     },
-    onSuccess: async ({ resolvedState, stateBeforeTurn }) => {
+    onSuccess: async ({ resolvedState }) => {
       setBattleStateSnapshot(resolvedState);
-      setPendingMoveName(null);
-      setIsTurnAnimating(true);
-      setAnimatedStatusText("Resolving turn...");
-
-      const eventNarration = normalizeLastTurnEventsToLines(resolvedState);
-      const prevTurnLog = stateBeforeTurn?.turnLog;
-      const newEntries = diffTurnLogEntries(prevTurnLog, resolvedState.turnLog);
-      const fallbackNarration = buildDisplayLog(newEntries, []).filter(
-        isNarrationLineRelevant,
-      );
-      const cleanedNarration =
-        eventNarration.length > 0 ? eventNarration : fallbackNarration;
-      setDisplayedLogLines(buildDisplayLog(stateBeforeTurn?.turnLog ?? [], []));
-
-      let nextP1 = stateBeforeTurn
-        ? hpPercentFromStatePokemon(stateBeforeTurn.p1Pokemon)
-        : hpPercentFromStatePokemon(resolvedState.p1Pokemon);
-      let nextP2 = stateBeforeTurn
-        ? hpPercentFromStatePokemon(stateBeforeTurn.p2Pokemon)
-        : hpPercentFromStatePokemon(resolvedState.p2Pokemon);
-      const finalP1 = hpPercentFromStatePokemon(resolvedState.p1Pokemon);
-      const finalP2 = hpPercentFromStatePokemon(resolvedState.p2Pokemon);
-
-      setVisualHpPercents({ p1: nextP1, p2: nextP2 });
-
-      for (const line of cleanedNarration) {
-        setDisplayedLogLines((prev) =>
-          prev[prev.length - 1] === line ? prev : [...prev, line],
-        );
-        setAnimatedStatusText(line);
-
-        const actor = stateBeforeTurn
-          ? getMoveActorFromLine(line, stateBeforeTurn)
-          : null;
-        if (actor === "p1" && nextP2 !== finalP2) {
-          await sleep(ACTION_DELAY_MS);
-          nextP2 = finalP2;
-          setVisualHpPercents({ p1: nextP1, p2: nextP2 });
-        } else if (actor === "p2" && nextP1 !== finalP1) {
-          await sleep(ACTION_DELAY_MS);
-          nextP1 = finalP1;
-          setVisualHpPercents({ p1: nextP1, p2: nextP2 });
-        }
-
-        await sleep(ACTION_DELAY_MS);
-      }
-
-      if (nextP1 !== finalP1 || nextP2 !== finalP2) {
-        setVisualHpPercents({ p1: finalP1, p2: finalP2 });
-      }
-
-      setIsTurnAnimating(false);
+      setPendingActionLabel(null);
+      setIsPlaybackRunning(false);
       setAnimatedStatusText(null);
       setIsSubmittingMove(false);
       isSubmittingMoveRef.current = false;
+      setVisualHpPercents({
+        p1: hpPercentFromStatePokemon(resolvedState.p1Pokemon),
+        p2: hpPercentFromStatePokemon(resolvedState.p2Pokemon),
+      });
     },
     onError: async (error) => {
-      setPendingMoveName(null);
-      setIsTurnAnimating(false);
+      setPendingActionLabel(null);
+      setIsPlaybackRunning(false);
       setAnimatedStatusText(null);
       setIsSubmittingMove(false);
       isSubmittingMoveRef.current = false;
-      setMoveUiError((error as Error).message || "Failed to submit move");
+      setMoveUiError((error as Error).message || "Failed to submit action");
       if (battleId) {
         try {
           const recovered = await fetchBattleState(battleId);
@@ -1435,6 +1934,22 @@ export function InteractiveBattle({
           // Keep UI recoverable even if refetch fails.
         }
       }
+    },
+  });
+
+  const continueMutation = useMutation({
+    mutationFn: async () => {
+      if (!battleId) throw new Error("No active battle");
+      if (liveBattleState?.awaitingAckEventSeq != null) {
+        throw new Error("Playback pending ACK. Continue blocked.");
+      }
+      return postBattleContinue({ battleId });
+    },
+    onSuccess: async () => {
+      await refetchBattleState();
+    },
+    onError: (error) => {
+      setMoveUiError((error as Error).message || "Continue failed");
     },
   });
 
@@ -1474,20 +1989,151 @@ export function InteractiveBattle({
     });
   };
 
-  const setupReady = !!setup.p1.selectedPokemon && !!setup.p2.selectedPokemon;
+  const toggleTurnCollapse = (turn: number) => {
+    setCollapsedTurns((prev) => ({ ...prev, [turn]: !prev[turn] }));
+  };
+
+  const setupReady = setup.randomTeams
+    ? true
+    : !!setup.p1.selectedPokemon && !!setup.p2.selectedPokemon;
+
+  useEffect(() => {
+    playbackEventsRef.current = playbackEvents;
+  }, [playbackEvents]);
+
+  useEffect(() => {
+    if (!liveBattleState) return;
+    const seeded = (liveBattleState.recentPlaybackEvents ?? [])
+      .map((event) => normalizePlaybackEvent(event))
+      .filter((event): event is PlaybackEvent => !!event)
+      .sort((a, b) => a.seq - b.seq);
+    if (!seeded.length) return;
+    setPlaybackEvents((prev) => mergePlaybackEvents(prev, seeded));
+    if (liveBattleState.awaitingAckEventSeq == null) {
+      const maxSeeded = seeded[seeded.length - 1]?.seq ?? 0;
+      if (maxSeeded > 0) setLastSeenSeq((prev) => Math.max(prev, maxSeeded));
+      setLastAckedSeq((prev) => Math.max(prev, maxSeeded));
+    }
+  }, [
+    liveBattleState?.battleId,
+    liveBattleState?.eventCursor,
+    liveBattleState?.awaitingAckEventSeq,
+    liveBattleState?.recentPlaybackEvents,
+  ]);
+
+  useEffect(() => {
+    if (!battleId || !liveBattleState || isPlaybackBusyRef.current) return;
+    if (liveBattleState.isEnded || liveBattleState.phase === "ended") return;
+
+    let cancelled = false;
+
+    const runPlaybackTick = async () => {
+      isPlaybackBusyRef.current = true;
+      try {
+        if (
+          liveBattleState.phase === "awaiting-forced-switch-p2" &&
+          liveBattleState.awaitingAckEventSeq == null &&
+          !sideNeedsMove(liveBattleState, "p1")
+        ) {
+          if (Date.now() - lastContinueAtRef.current > 1200) {
+            lastContinueAtRef.current = Date.now();
+            await postBattleContinue({ battleId });
+            await refetchBattleState();
+          }
+          return;
+        }
+
+        if (
+          typeof liveBattleState.eventCursor === "number" &&
+          liveBattleState.eventCursor > lastSeenSeq
+        ) {
+          const incoming = await fetchBattleEvents({
+            battleId,
+            afterSeq: lastSeenSeq,
+            limit: 120,
+          });
+          if (!cancelled && incoming.length) {
+            setPlaybackEvents((prev) => mergePlaybackEvents(prev, incoming));
+            if (liveBattleState.awaitingAckEventSeq == null) {
+              const maxSeq = incoming[incoming.length - 1]?.seq ?? 0;
+              setLastSeenSeq((prev) => Math.max(prev, maxSeq));
+              setLastAckedSeq((prev) => Math.max(prev, maxSeq));
+            }
+          }
+        }
+
+        const ackSeq = liveBattleState.awaitingAckEventSeq;
+        if (ackSeq == null) return;
+
+        let target = playbackEventsRef.current.find((event) => event.seq === ackSeq);
+        if (!target) {
+          const incoming = await fetchBattleEvents({
+            battleId,
+            afterSeq: Math.max(lastSeenSeq, ackSeq - 1),
+            limit: 60,
+          });
+          if (!cancelled && incoming.length) {
+            setPlaybackEvents((prev) => mergePlaybackEvents(prev, incoming));
+            target = incoming.find((event) => event.seq === ackSeq);
+          }
+        }
+        if (!target || cancelled) return;
+
+        setPlaybackError(null);
+        setIsPlaybackRunning(true);
+        setAnimatedStatusText(target.text);
+        await sleep(ACTION_DELAY_MS);
+        await postBattleAck({ battleId, eventSeq: target.seq });
+        if (cancelled) return;
+        setLastSeenSeq((prev) => Math.max(prev, target!.seq));
+        setLastAckedSeq((prev) => Math.max(prev, target!.seq));
+        setIsPlaybackRunning(false);
+        setAnimatedStatusText(null);
+        await refetchBattleState();
+      } catch (error) {
+        if (cancelled) return;
+        setIsPlaybackRunning(false);
+        const message = (error as Error).message || "Playback sync failed";
+        setPlaybackError(message);
+        await sleep(700);
+        await refetchBattleState();
+      } finally {
+        isPlaybackBusyRef.current = false;
+      }
+    };
+
+    void runPlaybackTick();
+    return () => {
+      cancelled = true;
+    };
+  }, [battleId, liveBattleState, lastSeenSeq, refetchBattleState]);
+
+  const turnLogGroups = useMemo(() => {
+    if (playbackEvents.length > 0) {
+      return buildTurnLogGroups(playbackEvents).slice(-20);
+    }
+    if (!liveBattleState) return [];
+    const fallbackEvents: PlaybackEvent[] = liveBattleState.turnLog.map(
+      (entry, index) => ({
+        seq: index + 1,
+        turn: liveBattleState.currentTurn,
+        type: "TURN_LOG",
+        text: formatTurnLogEntry(entry),
+        payload: entry,
+        timestamp: Date.now(),
+      }),
+    );
+    return buildTurnLogGroups(fallbackEvents).slice(-20);
+  }, [playbackEvents, liveBattleState]);
 
   const derivedStatusText = deriveStatusText({
     state: liveBattleState,
-    pendingMoveName,
+    pendingActionLabel,
     isSubmitting:
-      submitMoveMutation.isPending || isTurnAnimating || isSubmittingMove,
+      submitActionMutation.isPending || isPlaybackRunning || isSubmittingMove,
     errorMessage: moveUiError,
   });
   const statusText = animatedStatusText ?? derivedStatusText;
-  const resolvedLogLines = liveBattleState
-    ? buildDisplayLog(liveBattleState.turnLog, [])
-    : [];
-  const battleLogLines = isTurnAnimating ? displayedLogLines : resolvedLogLines;
 
   if (battleId && !liveBattleState) {
     return (
@@ -1528,36 +2174,55 @@ export function InteractiveBattle({
       <BattleArena
         battleState={liveBattleState}
         visualHpPercents={visualHpPercents}
-        displayedLogLines={battleLogLines}
-        isTurnAnimating={isTurnAnimating}
+        isPlaybackRunning={isPlaybackRunning}
         isSubmittingMove={isSubmittingMove}
         statusText={statusText}
-        moveSubmitPending={submitMoveMutation.isPending}
+        moveSubmitPending={submitActionMutation.isPending}
         moveSubmitError={moveUiError}
-        onSubmitMove={(moveIndexOneBased, moveName) => {
+        legalOptionsMessage={legalOptionsMessage}
+        turnLogGroups={turnLogGroups}
+        lastAckedSeq={lastAckedSeq}
+        awaitingAckEventSeq={liveBattleState.awaitingAckEventSeq ?? null}
+        collapsedTurns={collapsedTurns}
+        playbackError={playbackError}
+        onToggleTurnCollapse={toggleTurnCollapse}
+        onSubmitAction={({ choice, label, moveIndex }) => {
           if (isSubmittingMoveRef.current) return;
           if (
             !canPlayerAct(
               liveBattleState,
-              submitMoveMutation.isPending ||
-                isTurnAnimating ||
+              submitActionMutation.isPending ||
+                isPlaybackRunning ||
                 isSubmittingMove,
             )
           )
             return;
-          submitMoveMutation.mutate({ moveIndexOneBased, moveName });
+          submitActionMutation.mutate({
+            choice,
+            moveIndex,
+            actionLabel: label,
+          });
         }}
+        onContinue={() => continueMutation.mutate()}
+        continuePending={continueMutation.isPending}
         onLeaveBattle={() => {
           setBattleId(null);
           setBattleStateSnapshot(null);
-          setPendingMoveName(null);
+          setPendingActionLabel(null);
           setMoveUiError(null);
-          setDisplayedLogLines([]);
+          setLegalOptionsMessage(null);
+          setPlaybackEvents([]);
+          setLastSeenSeq(0);
+          setLastAckedSeq(0);
+          setCollapsedTurns({});
+          setPlaybackError(null);
           setVisualHpPercents(null);
-          setIsTurnAnimating(false);
+          setIsPlaybackRunning(false);
           setAnimatedStatusText(null);
           setIsSubmittingMove(false);
           isSubmittingMoveRef.current = false;
+          isPlaybackBusyRef.current = false;
+          lastContinueAtRef.current = 0;
           if (pathname !== "/") router.push("/");
         }}
       />
@@ -1566,83 +2231,153 @@ export function InteractiveBattle({
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 lg:grid-cols-2">
-        <PokemonSetupPanel
-          side="p1"
-          label="Player Pokémon (P1)"
-          setup={setup.p1}
-          onQueryChange={(value) =>
-            updateSide("p1", (prev) => ({ ...prev, query: value }))
-          }
-          onSelectPokemon={(pokemon) => handleSelectPokemon("p1", pokemon)}
-          onClearPokemon={() =>
-            updateSide("p1", () => ({
-              query: "",
-              selectedPokemon: null,
-              selectedMoves: [],
-              autoMoves: true,
-            }))
-          }
-          onToggleMove={(moveName) => handleToggleMove("p1", moveName)}
-          onClearMoves={() =>
-            updateSide("p1", (prev) => ({
-              ...prev,
-              selectedMoves: [],
-              autoMoves: false,
-            }))
-          }
-          onSetAutoMoves={(value) =>
-            updateSide("p1", (prev) => ({ ...prev, autoMoves: value }))
-          }
-          searchResults={p1SearchQuery.data ?? []}
-          searchLoading={p1SearchQuery.isFetching}
-          searchError={
-            p1SearchQuery.error ? (p1SearchQuery.error as Error).message : null
-          }
-          details={p1DetailsQuery.data ?? null}
-          moves={p1MovesQuery.data?.moves ?? []}
-          recommendedMoves={p1MovesQuery.data?.recommendedMoves ?? []}
-          movesLoading={p1MovesQuery.isFetching}
-        />
-
-        <PokemonSetupPanel
-          side="p2"
-          label="CPU Pokémon (P2)"
-          setup={setup.p2}
-          onQueryChange={(value) =>
-            updateSide("p2", (prev) => ({ ...prev, query: value }))
-          }
-          onSelectPokemon={(pokemon) => handleSelectPokemon("p2", pokemon)}
-          onClearPokemon={() =>
-            updateSide("p2", () => ({
-              query: "",
-              selectedPokemon: null,
-              selectedMoves: [],
-              autoMoves: true,
-            }))
-          }
-          onToggleMove={(moveName) => handleToggleMove("p2", moveName)}
-          onClearMoves={() =>
-            updateSide("p2", (prev) => ({
-              ...prev,
-              selectedMoves: [],
-              autoMoves: false,
-            }))
-          }
-          onSetAutoMoves={(value) =>
-            updateSide("p2", (prev) => ({ ...prev, autoMoves: value }))
-          }
-          searchResults={p2SearchQuery.data ?? []}
-          searchLoading={p2SearchQuery.isFetching}
-          searchError={
-            p2SearchQuery.error ? (p2SearchQuery.error as Error).message : null
-          }
-          details={p2DetailsQuery.data ?? null}
-          moves={p2MovesQuery.data?.moves ?? []}
-          recommendedMoves={p2MovesQuery.data?.recommendedMoves ?? []}
-          movesLoading={p2MovesQuery.isFetching}
-        />
+      <div className={panelClass}>
+        <div className="mb-3 text-xs tracking-[0.18em] text-white/40">FORMAT</div>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/80">
+            <input
+              type="checkbox"
+              checked={setup.randomTeams}
+              onChange={(e) =>
+                setSetup((prev) => ({
+                  ...prev,
+                  randomTeams: e.target.checked,
+                }))
+              }
+              className="size-4 accent-white"
+            />
+            Random teams
+          </label>
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <label className="space-y-1">
+            <span className="text-xs text-white/50">Battle format</span>
+            <input
+              value={setup.formatid}
+              onChange={(e) =>
+                setSetup((prev) => ({ ...prev, formatid: e.target.value }))
+              }
+              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
+              placeholder="gen9customgame"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs text-white/50">Random team format</span>
+            <input
+              value={setup.randomTeamFormatid}
+              onChange={(e) =>
+                setSetup((prev) => ({
+                  ...prev,
+                  randomTeamFormatid: e.target.value,
+                }))
+              }
+              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20 disabled:opacity-50"
+              placeholder="gen9randombattle"
+              disabled={!setup.randomTeams}
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs text-white/50">Random seed (optional)</span>
+            <input
+              value={setup.randomSeedInput}
+              onChange={(e) =>
+                setSetup((prev) => ({
+                  ...prev,
+                  randomSeedInput: e.target.value,
+                }))
+              }
+              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20 disabled:opacity-50"
+              placeholder="1,2,3,4"
+              disabled={!setup.randomTeams}
+            />
+          </label>
+        </div>
+        <div className="mt-3 text-xs text-white/50">
+          {setup.randomTeams
+            ? "Backend will generate true Showdown random teams."
+            : "Pick player and CPU Pokémon (and optional moves)."}
+        </div>
       </div>
+
+      {!setup.randomTeams && (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <PokemonSetupPanel
+            side="p1"
+            label="Player Pokémon (P1)"
+            setup={setup.p1}
+            onQueryChange={(value) =>
+              updateSide("p1", (prev) => ({ ...prev, query: value }))
+            }
+            onSelectPokemon={(pokemon) => handleSelectPokemon("p1", pokemon)}
+            onClearPokemon={() =>
+              updateSide("p1", () => ({
+                query: "",
+                selectedPokemon: null,
+                selectedMoves: [],
+                autoMoves: true,
+              }))
+            }
+            onToggleMove={(moveName) => handleToggleMove("p1", moveName)}
+            onClearMoves={() =>
+              updateSide("p1", (prev) => ({
+                ...prev,
+                selectedMoves: [],
+                autoMoves: false,
+              }))
+            }
+            onSetAutoMoves={(value) =>
+              updateSide("p1", (prev) => ({ ...prev, autoMoves: value }))
+            }
+            searchResults={p1SearchQuery.data ?? []}
+            searchLoading={p1SearchQuery.isFetching}
+            searchError={
+              p1SearchQuery.error ? (p1SearchQuery.error as Error).message : null
+            }
+            details={p1DetailsQuery.data ?? null}
+            moves={p1MovesQuery.data?.moves ?? []}
+            recommendedMoves={p1MovesQuery.data?.recommendedMoves ?? []}
+            movesLoading={p1MovesQuery.isFetching}
+          />
+
+          <PokemonSetupPanel
+            side="p2"
+            label="CPU Pokémon (P2)"
+            setup={setup.p2}
+            onQueryChange={(value) =>
+              updateSide("p2", (prev) => ({ ...prev, query: value }))
+            }
+            onSelectPokemon={(pokemon) => handleSelectPokemon("p2", pokemon)}
+            onClearPokemon={() =>
+              updateSide("p2", () => ({
+                query: "",
+                selectedPokemon: null,
+                selectedMoves: [],
+                autoMoves: true,
+              }))
+            }
+            onToggleMove={(moveName) => handleToggleMove("p2", moveName)}
+            onClearMoves={() =>
+              updateSide("p2", (prev) => ({
+                ...prev,
+                selectedMoves: [],
+                autoMoves: false,
+              }))
+            }
+            onSetAutoMoves={(value) =>
+              updateSide("p2", (prev) => ({ ...prev, autoMoves: value }))
+            }
+            searchResults={p2SearchQuery.data ?? []}
+            searchLoading={p2SearchQuery.isFetching}
+            searchError={
+              p2SearchQuery.error ? (p2SearchQuery.error as Error).message : null
+            }
+            details={p2DetailsQuery.data ?? null}
+            moves={p2MovesQuery.data?.moves ?? []}
+            recommendedMoves={p2MovesQuery.data?.recommendedMoves ?? []}
+            movesLoading={p2MovesQuery.isFetching}
+          />
+        </div>
+      )}
 
       <div className={panelClass}>
         <div className="mb-4 text-sm font-medium tracking-wide text-white/70">
@@ -1659,9 +2394,11 @@ export function InteractiveBattle({
             >
               <div className="text-xs tracking-wide text-white/45">{label}</div>
               <div className="mt-1 text-sm font-medium text-white">
-                {data.selectedPokemon?.name ?? "Not selected"}
+                {setup.randomTeams
+                  ? "Auto-generated team"
+                  : data.selectedPokemon?.name ?? "Not selected"}
               </div>
-              {data.selectedPokemon && (
+              {!setup.randomTeams && data.selectedPokemon && (
                 <div className="mt-1 text-xs text-white/50">
                   {data.autoMoves
                     ? "Moves: auto-select"
