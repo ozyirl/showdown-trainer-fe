@@ -25,6 +25,9 @@ type BattlePokemonState = {
   maxHp: number;
   hpPercent?: number | null;
   status: string | null;
+  boosts?: Record<string, number> | null;
+  item?: string | null;
+  ability?: string | null;
 };
 
 type BattleMove = {
@@ -112,6 +115,13 @@ type PlaybackEvent = {
   turn: number;
   type: string;
   text: string;
+  description?: string | null;
+  actor?: string | null;
+  target?: string | null;
+  hpPercent?: number | null;
+  deltaPercent?: number | null;
+  sourceType?: string | null;
+  sourceName?: string | null;
   payload: unknown;
   timestamp: number;
 };
@@ -377,6 +387,10 @@ async function postBattleMove(params: {
 function normalizePlaybackEvent(raw: unknown): PlaybackEvent | null {
   if (!raw || typeof raw !== "object") return null;
   const data = raw as Record<string, unknown>;
+  const payload =
+    data.payload && typeof data.payload === "object"
+      ? (data.payload as Record<string, unknown>)
+      : null;
   const seq = Number(data.seq);
   if (!Number.isFinite(seq)) return null;
   const type = String(data.type ?? data.kind ?? "event");
@@ -388,13 +402,27 @@ function normalizePlaybackEvent(raw: unknown): PlaybackEvent | null {
         ? data.ts
         : Date.now();
 
-  const text = extractReadableEventText(data, type, seq);
+  const text = extractReadableEventText(data, payload, type, seq);
+  const description = pickStringValue(data, payload, "description");
+  const actor = pickStringValue(data, payload, "actor");
+  const target = pickStringValue(data, payload, "target");
+  const sourceType = pickStringValue(data, payload, "sourceType");
+  const sourceName = pickStringValue(data, payload, "sourceName");
+  const hpPercent = pickNumberValue(data, payload, "hpPercent");
+  const deltaPercent = pickNumberValue(data, payload, "deltaPercent");
 
   return {
     seq,
     turn: Number.isFinite(turnValue) ? turnValue : 0,
     type,
     text,
+    description,
+    actor,
+    target,
+    hpPercent,
+    deltaPercent,
+    sourceType,
+    sourceName,
     payload: raw,
     timestamp,
   };
@@ -402,6 +430,7 @@ function normalizePlaybackEvent(raw: unknown): PlaybackEvent | null {
 
 function extractReadableEventText(
   data: Record<string, unknown>,
+  payload: Record<string, unknown> | null,
   type: string,
   seq: number,
 ) {
@@ -427,10 +456,6 @@ function extractReadableEventText(
   const directText = readFromObject(data);
   if (directText) return directText;
 
-  const payload =
-    data.payload && typeof data.payload === "object"
-      ? (data.payload as Record<string, unknown>)
-      : null;
   const payloadText = readFromObject(payload);
   if (payloadText) return payloadText;
 
@@ -466,7 +491,69 @@ function extractReadableEventText(
         : null;
   if (reason?.trim()) return reason.trim();
 
+  if (type.toUpperCase() === "TURN_START") {
+    const turnNum = pickNumberValue(data, payload, "turn");
+    if (typeof turnNum === "number") return `Turn ${turnNum}`;
+    return `${type}#${seq}`;
+  }
+  if (type.toUpperCase() === "TURN_END") {
+    const ended = pickNumberValue(data, payload, "endedTurn");
+    if (typeof ended === "number") return `End of turn ${ended}`;
+    return `Turn ended`;
+  }
+  if (type.toUpperCase() === "ITEM_HEAL") {
+    const source = pickStringValue(data, payload, "sourceName") ?? "item";
+    const delta = pickNumberValue(data, payload, "deltaPercent");
+    if (typeof delta === "number") return `${formatSignedDelta(delta)} from ${source}`;
+    return `Recovered HP from ${source}`;
+  }
+  if (type.toUpperCase() === "ABILITY_HEAL") {
+    const source = pickStringValue(data, payload, "sourceName") ?? "ability";
+    const delta = pickNumberValue(data, payload, "deltaPercent");
+    if (typeof delta === "number") return `${formatSignedDelta(delta)} from ${source}`;
+    return `Recovered HP from ${source}`;
+  }
+  if (type.toUpperCase() === "STATUS_TICK" || type.toUpperCase() === "WEATHER_TICK") {
+    const source = pickStringValue(data, payload, "sourceName") ?? "effect";
+    const delta = pickNumberValue(data, payload, "deltaPercent");
+    if (typeof delta === "number") return `${formatSignedDelta(delta)} from ${source}`;
+    return `HP changed from ${source}`;
+  }
+
   return `${type}#${seq}`;
+}
+
+function pickStringValue(
+  data: Record<string, unknown>,
+  payload: Record<string, unknown> | null,
+  key: string,
+) {
+  const direct = data[key];
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const nested = payload?.[key];
+  if (typeof nested === "string" && nested.trim()) return nested.trim();
+  return null;
+}
+
+function pickNumberValue(
+  data: Record<string, unknown>,
+  payload: Record<string, unknown> | null,
+  key: string,
+) {
+  const direct = data[key];
+  if (typeof direct === "number" && Number.isFinite(direct)) return direct;
+  const nested = payload?.[key];
+  if (typeof nested === "number" && Number.isFinite(nested)) return nested;
+  if (typeof nested === "string") {
+    const parsed = Number(nested);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function formatSignedDelta(delta: number) {
+  const rounded = Math.round(delta);
+  return `${rounded >= 0 ? "+" : ""}${rounded}%`;
 }
 
 async function postBattleAction(params: {
@@ -835,14 +922,14 @@ function deriveStatusText(params: {
   }
   if (isSubmitting) return "CPU is choosing an action...";
   if (state.awaitingAckEventSeq != null || state.phase === "awaiting-event-ack") {
-    return `Playing event #${state.awaitingAckEventSeq ?? "?"}...`;
+    return `Rendering event #${state.awaitingAckEventSeq ?? "?"}...`;
   }
   if (state.phase === "team-preview") return "Choose team order (e.g. 123456).";
   if (state.phase === "resolving") return "Resolving turn...";
   if (state.phase === "awaiting-forced-switch-p1")
     return "Forced switch: choose your next Pokémon.";
   if (state.phase === "awaiting-forced-switch-p2")
-    return "Opponent must switch. Continuing...";
+    return "Waiting for backend choice phase (opponent forced switch)...";
   const hasMoves = state.availableMoves.length > 0;
   const hasSwitches = (state.availableSwitches?.length ?? 0) > 0;
   if (sideNeedsMove(state, "p1") && !hasMoves && hasSwitches) {
@@ -876,6 +963,67 @@ function typeChipText(types: string[]) {
   return types.length ? types.join(" / ") : "Unknown type";
 }
 
+function getStatusDisplay(status: string | null): { emoji: string; label: string; colorClass: string } | null {
+  if (!status) return null;
+  const map: Record<string, { emoji: string; label: string; colorClass: string }> = {
+    brn: { emoji: "🔥", label: "Burn", colorClass: "text-orange-400 bg-orange-400/15 border-orange-400/30" },
+    par: { emoji: "⚡", label: "Paralysis", colorClass: "text-yellow-400 bg-yellow-400/15 border-yellow-400/30" },
+    psn: { emoji: "☠️", label: "Poison", colorClass: "text-purple-400 bg-purple-400/15 border-purple-400/30" },
+    tox: { emoji: "☠️", label: "Toxic", colorClass: "text-fuchsia-400 bg-fuchsia-400/15 border-fuchsia-400/30" },
+    slp: { emoji: "💤", label: "Sleep", colorClass: "text-blue-300 bg-blue-300/15 border-blue-300/30" },
+    frz: { emoji: "❄️", label: "Frozen", colorClass: "text-cyan-300 bg-cyan-300/15 border-cyan-300/30" },
+  };
+  return map[status] ?? null;
+}
+
+function formatBoostLabel(stat: string, amount: number): string {
+  const statNames: Record<string, string> = {
+    atk: "Atk", def: "Def", spa: "SpA", spd: "SpD", spe: "Spe",
+    accuracy: "Acc", evasion: "Eva",
+  };
+  const name = statNames[stat] || stat;
+  return `${amount > 0 ? "+" : ""}${amount} ${name}`;
+}
+
+function normalizeSpriteName(name: string): string {
+  return name.trim().toLowerCase().replace(/[\s.':-]/g, "").replace(/♀/g, "f").replace(/♂/g, "m");
+}
+
+function getSpriteUrl(name: string): string {
+  if (!name || name === "Unknown") return "";
+  return `https://play.pokemonshowdown.com/sprites/gen5ani/${normalizeSpriteName(name)}.gif`;
+}
+
+function getSpriteFallbackUrl(name: string): string {
+  if (!name || name === "Unknown") return "";
+  return `https://play.pokemonshowdown.com/sprites/gen5/${normalizeSpriteName(name)}.png`;
+}
+
+function getPokeApiFallbackUrl(name: string): string {
+  if (!name || name === "Unknown") return "";
+  const normalized = normalizeSpriteName(name);
+  return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${normalized}.png`;
+}
+
+function formatItemName(item: string | null | undefined): string | null {
+  if (!item) return null;
+  const id = item.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!id) return null;
+  return item.charAt(0).toUpperCase() + item.slice(1);
+}
+
+function isControlEvent(type: string) {
+  const upper = type.toUpperCase();
+  return (
+    upper === "REQUEST_MOVE" ||
+    upper === "REQUEST_SWITCH" ||
+    upper === "TURN_END" ||
+    upper === "TURN_START" ||
+    upper === "PAUSE" ||
+    upper === "FORCED_SWITCH_REQUIRED"
+  );
+}
+
 function mergePlaybackEvents(
   previous: PlaybackEvent[],
   next: PlaybackEvent[],
@@ -893,14 +1041,60 @@ function isBlockingEventType(type: string) {
     upper.includes("FAINT") ||
     upper.includes("REQUEST_SWITCH") ||
     upper.includes("REQUEST_MOVE") ||
-    upper.includes("TURN_END")
+    upper.includes("TURN_END") ||
+    upper.includes("TURN_START")
   );
+}
+
+function eventBadgeClass(type: string) {
+  const upper = type.toUpperCase();
+  if (upper === "TURN_START") return "border-amber-400/30 bg-amber-400/10 text-amber-200";
+  if (upper.includes("REQUEST")) return "border-blue-400/30 bg-blue-400/10 text-blue-200";
+  if (upper.includes("FAINT")) return "border-red-400/30 bg-red-400/10 text-red-200";
+  if (upper.includes("TURN_END")) return "border-zinc-400/30 bg-zinc-400/10 text-zinc-200";
+  if (
+    upper.includes("ITEM_HEAL") ||
+    upper.includes("ABILITY_HEAL") ||
+    upper.includes("STATUS_TICK") ||
+    upper.includes("WEATHER_TICK")
+  ) {
+    return "border-emerald-400/30 bg-emerald-400/10 text-emerald-200";
+  }
+  if (upper === "BOOST" || upper === "UNBOOST") return "border-violet-400/30 bg-violet-400/10 text-violet-200";
+  if (upper === "ITEM" || upper === "ENDITEM") return "border-yellow-400/30 bg-yellow-400/10 text-yellow-200";
+  if (upper === "ABILITY") return "border-cyan-400/30 bg-cyan-400/10 text-cyan-200";
+  if (upper === "WEATHER" || upper === "FIELD_START" || upper === "FIELD_END") return "border-sky-400/30 bg-sky-400/10 text-sky-200";
+  if (upper === "IMMUNE" || upper === "BLOCK") return "border-gray-400/30 bg-gray-400/10 text-gray-300";
+  if (upper === "SIDE_START" || upper === "SIDE_END") return "border-orange-400/30 bg-orange-400/10 text-orange-200";
+  if (upper === "VOLATILE_START" || upper === "VOLATILE_END" || upper === "CURE_STATUS") return "border-pink-400/30 bg-pink-400/10 text-pink-200";
+  if (upper === "HIT_COUNT" || upper === "OHKO") return "border-rose-400/30 bg-rose-400/10 text-rose-200";
+  return "border-white/20 bg-white/[0.06] text-white/75";
+}
+
+function getEventDeltaLabel(event: PlaybackEvent) {
+  if (typeof event.deltaPercent !== "number") return null;
+  const source = event.sourceName ?? event.sourceType ?? "effect";
+  return `${formatSignedDelta(event.deltaPercent)} from ${source}`;
+}
+
+function eventKeyForDedup(event: PlaybackEvent) {
+  return `${event.turn}:${event.type}:${event.text}`;
 }
 
 function buildTurnLogGroups(events: PlaybackEvent[]): TurnLogGroup[] {
   const groups: TurnLogGroup[] = [];
   const groupByTurn = new Map<number, TurnLogGroup>();
+  const seenBoundaryKeys = new Set<string>();
   for (const event of events) {
+    if (
+      ["REQUEST_MOVE", "REQUEST_SWITCH", "TURN_END", "TURN_START"].includes(
+        event.type.toUpperCase(),
+      )
+    ) {
+      const key = eventKeyForDedup(event);
+      if (seenBoundaryKeys.has(key)) continue;
+      seenBoundaryKeys.add(key);
+    }
     const turn = event.turn > 0 ? event.turn : 0;
     const existing = groupByTurn.get(turn);
     if (existing) {
@@ -912,6 +1106,45 @@ function buildTurnLogGroups(events: PlaybackEvent[]): TurnLogGroup[] {
     groups.push(created);
   }
   return groups.sort((a, b) => a.turn - b.turn);
+}
+
+function resolveBattleSideFromIdent(
+  value: string | null | undefined,
+): "p1" | "p2" | null {
+  if (!value) return null;
+  const lower = value.toLowerCase();
+  if (lower.includes("p1")) return "p1";
+  if (lower.includes("p2")) return "p2";
+  if (lower.includes("you")) return "p1";
+  if (lower.includes("opponent")) return "p2";
+  return null;
+}
+
+function applyPlaybackEventToHpVisual(
+  current: { p1: number; p2: number },
+  event: PlaybackEvent,
+) {
+  const next = { ...current };
+  const side =
+    resolveBattleSideFromIdent(event.target) ??
+    resolveBattleSideFromIdent(event.actor);
+  if (!side) return next;
+
+  if (typeof event.hpPercent === "number" && Number.isFinite(event.hpPercent)) {
+    next[side] = Math.max(0, Math.min(100, Math.round(event.hpPercent)));
+    return next;
+  }
+  if (
+    typeof event.deltaPercent === "number" &&
+    Number.isFinite(event.deltaPercent)
+  ) {
+    next[side] = Math.max(
+      0,
+      Math.min(100, Math.round(next[side] + event.deltaPercent)),
+    );
+    return next;
+  }
+  return next;
 }
 
 function MoveSelector(params: {
@@ -1277,40 +1510,90 @@ function BattleArena(params: {
                 label: "Opponent",
                 p: battleState.p2Pokemon,
               },
-            ].map(({ key, label, p }) => (
-              <div key={label} className={panelClass}>
-                <div className="mb-3 text-sm font-medium text-white/60">
-                  {label}
-                </div>
-                <div className="flex items-center gap-3">
-                  <img
-                    src={`https://play.pokemonshowdown.com/sprites/gen5ani/${p.name.toLowerCase()}.gif`}
-                    alt={p.name}
-                    className="h-20 w-20 object-contain"
-                    onError={(e) => {
-                      e.currentTarget.src = `https://play.pokemonshowdown.com/sprites/gen5/${p.name.toLowerCase()}.png`;
-                    }}
-                  />
-                  <div className="min-w-0 flex-1 space-y-2">
-                    <div className="truncate text-lg font-semibold tracking-tight text-white">
-                      {p.name}
-                    </div>
-                    <div className="flex justify-between text-xs text-white/60">
-                      <span>HP</span>
-                      <span>{currentHpPercents[key]}%</span>
-                    </div>
-                    <div className="h-2.5 w-full rounded-full bg-white/10">
-                      <div
-                        className={`h-2.5 rounded-full transition-all duration-500 ${getHpBarClass(
-                          currentHpPercents[key],
-                        )}`}
-                        style={{ width: `${currentHpPercents[key]}%` }}
+            ].map(({ key, label, p }) => {
+              const statusInfo = getStatusDisplay(p.status);
+              const boosts = p.boosts;
+              const itemLabel = formatItemName(p.item);
+              const isUnknown = !p.name || p.name === "Unknown";
+
+              return (
+                <div key={label} className={panelClass}>
+                  <div className="mb-3 flex items-center justify-between">
+                    <span className="text-sm font-medium text-white/60">{label}</span>
+                    {p.ability && (
+                      <span className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2 py-0.5 text-[10px] text-cyan-300">
+                        {p.ability}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {isUnknown ? (
+                      <div className="flex h-20 w-20 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-center text-xs text-white/40">
+                        Switching...
+                      </div>
+                    ) : (
+                      <img
+                        src={getSpriteUrl(p.name)}
+                        alt={p.name}
+                        className="h-20 w-20 object-contain"
+                        onError={(e) => {
+                          const el = e.currentTarget;
+                          const fallback1 = getSpriteFallbackUrl(p.name);
+                          if (el.src !== fallback1) {
+                            el.src = fallback1;
+                            return;
+                          }
+                          el.src = `https://img.pokemondb.net/sprites/home/normal/${normalizeSpriteName(p.name)}.png`;
+                        }}
                       />
+                    )}
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-lg font-semibold tracking-tight text-white">
+                          {isUnknown ? "Switching..." : p.name}
+                        </span>
+                        {statusInfo && (
+                          <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusInfo.colorClass}`}>
+                            {statusInfo.emoji} {statusInfo.label}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex justify-between text-xs text-white/60">
+                        <span>HP</span>
+                        <span>{currentHpPercents[key]}%</span>
+                      </div>
+                      <div className="h-2.5 w-full rounded-full bg-white/10">
+                        <div
+                          className={`h-2.5 rounded-full transition-all duration-500 ${getHpBarClass(
+                            currentHpPercents[key],
+                          )}`}
+                          style={{ width: `${currentHpPercents[key]}%` }}
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {itemLabel && (
+                          <span className="rounded-full border border-yellow-400/25 bg-yellow-400/10 px-1.5 py-0.5 text-[10px] text-yellow-300">
+                            📦 {itemLabel}
+                          </span>
+                        )}
+                        {boosts && Object.entries(boosts).map(([stat, amt]) => (
+                          <span
+                            key={stat}
+                            className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${
+                              amt > 0
+                                ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+                                : "border-red-400/25 bg-red-400/10 text-red-300"
+                            }`}
+                          >
+                            {formatBoostLabel(stat, amt)}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {!battleState.isEnded && (
@@ -1520,6 +1803,7 @@ function BattleArena(params: {
               {turnLogGroups
                 .filter((group) => group.turn <= 0)
                 .flatMap((group) => group.events)
+                .filter((event) => !isControlEvent(event.type))
                 .map((event) => (
                   <div key={`opening-${event.seq}`} className="text-sm leading-relaxed text-white/85">
                     {event.text}
@@ -1534,7 +1818,9 @@ function BattleArena(params: {
                       Turn {group.turn}
                     </div>
                     <div className="space-y-1.5">
-                      {group.events.map((event) => (
+                      {group.events
+                        .filter((event) => !isControlEvent(event.type))
+                        .map((event) => (
                         <div
                           key={event.seq}
                           className={`text-sm leading-relaxed ${
@@ -1545,7 +1831,23 @@ function BattleArena(params: {
                                 : "text-white/60"
                           }`}
                         >
-                          {event.text}
+                          <div className="flex items-start gap-2">
+                            <span
+                              className={`mt-0.5 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${eventBadgeClass(
+                                event.type,
+                              )}`}
+                            >
+                              {event.type}
+                            </span>
+                            <div className="min-w-0">
+                              <div>{event.text}</div>
+                              {(event.description || getEventDeltaLabel(event)) && (
+                                <div className="text-xs text-white/55">
+                                  {event.description ?? getEventDeltaLabel(event)}
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -1614,6 +1916,7 @@ export function InteractiveBattle({
   const isPlaybackBusyRef = useRef(false);
   const lastContinueAtRef = useRef(0);
   const playbackEventsRef = useRef<PlaybackEvent[]>([]);
+  const processedSeqRef = useRef<Set<number>>(new Set());
 
   const p1SearchDebounced = useDebouncedValue(
     setup.p1.query.trim(),
@@ -1805,6 +2108,7 @@ export function InteractiveBattle({
       setPlaybackEvents([]);
       setLastSeenSeq(0);
       setLastAckedSeq(0);
+      processedSeqRef.current.clear();
       setCollapsedTurns({});
       setPlaybackError(null);
       setVisualHpPercents({
@@ -2012,7 +2316,11 @@ export function InteractiveBattle({
     if (liveBattleState.awaitingAckEventSeq == null) {
       const maxSeeded = seeded[seeded.length - 1]?.seq ?? 0;
       if (maxSeeded > 0) setLastSeenSeq((prev) => Math.max(prev, maxSeeded));
-      setLastAckedSeq((prev) => Math.max(prev, maxSeeded));
+      setLastAckedSeq((prev) => {
+        const next = Math.max(prev, maxSeeded);
+        for (let seq = 1; seq <= next; seq += 1) processedSeqRef.current.add(seq);
+        return next;
+      });
     }
   }, [
     liveBattleState?.battleId,
@@ -2064,6 +2372,12 @@ export function InteractiveBattle({
 
         const ackSeq = liveBattleState.awaitingAckEventSeq;
         if (ackSeq == null) return;
+        if (ackSeq <= lastAckedSeq || processedSeqRef.current.has(ackSeq)) {
+          setLastSeenSeq((prev) => Math.max(prev, ackSeq));
+          setLastAckedSeq((prev) => Math.max(prev, ackSeq));
+          await refetchBattleState();
+          return;
+        }
 
         let target = playbackEventsRef.current.find((event) => event.seq === ackSeq);
         if (!target) {
@@ -2082,9 +2396,19 @@ export function InteractiveBattle({
         setPlaybackError(null);
         setIsPlaybackRunning(true);
         setAnimatedStatusText(target.text);
+        setVisualHpPercents((prev) => {
+          const base =
+            prev ??
+            ({
+              p1: hpPercentFromStatePokemon(liveBattleState.p1Pokemon),
+              p2: hpPercentFromStatePokemon(liveBattleState.p2Pokemon),
+            } as { p1: number; p2: number });
+          return applyPlaybackEventToHpVisual(base, target!);
+        });
         await sleep(ACTION_DELAY_MS);
         await postBattleAck({ battleId, eventSeq: target.seq });
         if (cancelled) return;
+        processedSeqRef.current.add(target.seq);
         setLastSeenSeq((prev) => Math.max(prev, target!.seq));
         setLastAckedSeq((prev) => Math.max(prev, target!.seq));
         setIsPlaybackRunning(false);
@@ -2095,6 +2419,24 @@ export function InteractiveBattle({
         setIsPlaybackRunning(false);
         const message = (error as Error).message || "Playback sync failed";
         setPlaybackError(message);
+        if (message.toLowerCase().includes("ack")) {
+          await refetchBattleState();
+          const cursor =
+            typeof liveBattleState.eventCursor === "number"
+              ? liveBattleState.eventCursor
+              : lastSeenSeq;
+          const replayAfter = Math.max(0, Math.min(lastSeenSeq, cursor - 40));
+          const incoming = await fetchBattleEvents({
+            battleId,
+            afterSeq: replayAfter,
+            limit: 120,
+          }).catch(() => []);
+          if (!cancelled && incoming.length) {
+            setPlaybackEvents((prev) => mergePlaybackEvents(prev, incoming));
+          }
+          await sleep(400);
+          return;
+        }
         await sleep(700);
         await refetchBattleState();
       } finally {
@@ -2106,7 +2448,7 @@ export function InteractiveBattle({
     return () => {
       cancelled = true;
     };
-  }, [battleId, liveBattleState, lastSeenSeq, refetchBattleState]);
+  }, [battleId, liveBattleState, lastSeenSeq, lastAckedSeq, refetchBattleState]);
 
   const turnLogGroups = useMemo(() => {
     if (playbackEvents.length > 0) {
@@ -2214,6 +2556,7 @@ export function InteractiveBattle({
           setPlaybackEvents([]);
           setLastSeenSeq(0);
           setLastAckedSeq(0);
+          processedSeqRef.current.clear();
           setCollapsedTurns({});
           setPlaybackError(null);
           setVisualHpPercents(null);
