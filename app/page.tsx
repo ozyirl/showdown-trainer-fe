@@ -1,528 +1,418 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import TextCursorProximity from "@/components/fancy/text/text-cursor-proximity";
-import { InteractiveBattle } from "./interactive-battle";
+import { UserButton } from "@clerk/nextjs";
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useRef } from "react";
+import TextCursorProximity from "@/components/fancy/text/text-cursor-proximity";
+import ScrambleHover from "@/components/fancy/text/scramble-hover";
+import PixelTrail from "@/components/fancy/background/pixel-trail";
+import Float from "@/components/fancy/blocks/float";
 
-const API_URL = "http://localhost:5200/api";
+const BRAND = "#0015ff";
 
-interface BattleLog {
-  rawLog: string[];
-  formattedLog: string;
-  winner: string | null;
-  turns: number;
-}
+const POKEMON = [
+  { name: "Charizard", types: ["Fire", "Flying"] },
+  { name: "Gengar", types: ["Ghost", "Poison"] },
+  { name: "Mewtwo", types: ["Psychic"] },
+  { name: "Dragonite", types: ["Dragon", "Flying"] },
+];
 
-interface PokemonInfo {
-  name: string;
-  num: number;
-  types: string[];
-  baseStats: {
-    hp: number;
-    atk: number;
-    def: number;
-    spa: number;
-    spd: number;
-    spe: number;
-  };
-  abilities: Record<string, string>;
-  weightkg: number;
-  tier: string;
-}
+const TYPE_COLOR: Record<string, string> = {
+  Normal: "bg-zinc-400/20 text-zinc-300",
+  Fire: "bg-orange-500/20 text-orange-300",
+  Water: "bg-blue-500/20 text-blue-300",
+  Electric: "bg-yellow-400/20 text-yellow-300",
+  Grass: "bg-green-500/20 text-green-300",
+  Ice: "bg-cyan-400/20 text-cyan-300",
+  Fighting: "bg-red-600/20 text-red-400",
+  Poison: "bg-fuchsia-500/20 text-fuchsia-300",
+  Ground: "bg-amber-600/20 text-amber-400",
+  Flying: "bg-sky-400/20 text-sky-300",
+  Psychic: "bg-pink-500/20 text-pink-300",
+  Bug: "bg-lime-500/20 text-lime-300",
+  Rock: "bg-stone-500/20 text-stone-300",
+  Ghost: "bg-purple-500/20 text-purple-300",
+  Dragon: "bg-indigo-500/20 text-indigo-300",
+  Dark: "bg-neutral-600/20 text-neutral-300",
+  Steel: "bg-slate-400/20 text-slate-300",
+  Fairy: "bg-rose-400/20 text-rose-300",
+};
+
+const TAGS = [
+  "Random Battle",
+  "Gen 9",
+  "Competitive",
+  "OU Tier",
+  "Team Preview",
+  "EV Training",
+  "Metagame",
+  "Ladder",
+];
 
 const proximityStyles = {
-  title: {
-    filter: {
-      from: "blur(0px)",
-      to: "blur(6px)",
-    },
-  },
-  details: {
-    filter: {
-      from: "blur(0px)",
-      to: "blur(3px)",
-    },
-  },
+  title: { filter: { from: "blur(0px)", to: "blur(6px)" } },
 } as const;
 
+function spriteGif(name: string) {
+  return `https://play.pokemonshowdown.com/sprites/gen5ani/${name.toLowerCase()}.gif`;
+}
+
+function spritePng(name: string) {
+  return `https://play.pokemonshowdown.com/sprites/gen5/${name.toLowerCase()}.png`;
+}
+
+function TypeChip({ type }: { type: string }) {
+  const colors = TYPE_COLOR[type] ?? "bg-white/10 text-white/70";
+  return (
+    <span
+      className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${colors}`}
+    >
+      {type}
+    </span>
+  );
+}
+
+const maskBase: React.CSSProperties = {
+  WebkitMaskSize: "100% 100%",
+  maskSize: "100% 100%",
+  WebkitMaskRepeat: "no-repeat",
+  maskRepeat: "no-repeat",
+  WebkitMaskPosition: "center",
+  maskPosition: "center",
+};
+
+const glass =
+  "rounded-3xl border border-white/10 bg-white/5 backdrop-blur-md overflow-hidden";
+
 export default function Home() {
-  const [mode, setMode] = useState<"demo" | "interactive">("interactive");
-  const heroRef = useRef<HTMLDivElement>(null);
-  const brandBlue = "#0015ff";
-  const tabClass = (active: boolean) =>
-    `rounded-full px-4 py-2 text-sm font-medium transition-colors border ${
-      active
-        ? "border-white/20 text-white shadow-[0_0_40px_-18px_rgba(0,21,255,0.95)]"
-        : "border-white/10 bg-white/[0.02] text-white/70 hover:border-white/20 hover:text-white"
-    }`;
-  const bentoCard =
-    "rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.03] to-white/[0.01] p-6 backdrop-blur";
-
-  // Fetch battle simulation
-  const {
-    data: battleData,
-    isLoading: battleLoading,
-    error: battleError,
-    refetch: refetchBattle,
-  } = useQuery<BattleLog>({
-    queryKey: ["battle"],
-    queryFn: async () => {
-      const response = await fetch(`${API_URL}/battle/simulate`);
-      if (!response.ok) throw new Error("Failed to fetch battle");
-      return response.json();
-    },
-    enabled: mode === "demo",
-  });
-
-  // Fetch Gengar info
-  const { data: gengarData } = useQuery<PokemonInfo>({
-    queryKey: ["pokemon", "gengar"],
-    queryFn: async () => {
-      const response = await fetch(`${API_URL}/battle/pokemon/gengar`);
-      if (!response.ok) throw new Error("Failed to fetch Pokemon");
-      return response.json();
-    },
-    enabled: mode === "demo",
-  });
-
-  // Fetch Charizard info
-  const { data: charizardData } = useQuery<PokemonInfo>({
-    queryKey: ["pokemon", "charizard"],
-    queryFn: async () => {
-      const response = await fetch(`${API_URL}/battle/pokemon/charizard`);
-      if (!response.ok) throw new Error("Failed to fetch Pokemon");
-      return response.json();
-    },
-    enabled: mode === "demo",
-  });
+  const pageRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-black text-white">
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_20%_15%,rgba(0,21,255,0.18),transparent_38%),radial-gradient(circle_at_78%_18%,rgba(0,21,255,0.12),transparent_42%),radial-gradient(circle_at_50%_90%,rgba(0,21,255,0.08),transparent_45%)]" />
+    <div className="relative min-h-screen text-white">
+      {/* Fixed gradient background */}
+      <img
+        src="/gradient.jpg"
+        alt=""
+        className="pointer-events-none fixed inset-0 -z-20 h-full w-full object-cover"
+      />
 
-        {/* Bento Header */}
-        <div
-          className="mb-8 grid grid-cols-1 gap-4 lg:grid-cols-12 lg:auto-rows-min"
-          ref={heroRef}
-        >
+      {/* Pixel trail cursor effect */}
+      <div className="fixed inset-0 z-0">
+        <PixelTrail
+          pixelSize={48}
+          fadeDuration={500}
+          pixelClassName="bg-white/8"
+        />
+      </div>
+
+      {/* Page content */}
+      <div
+        ref={pageRef}
+        className="relative z-10 mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8"
+      >
+        {/* ── Navigation ── */}
+        <nav className="mb-10 flex items-center justify-between">
+          <Link href="/" className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-base">
+              ⚔️
+            </div>
+            <span className="text-sm font-bold uppercase tracking-[0.08em]">
+              Showdown Trainer
+            </span>
+          </Link>
+          <div className="flex items-center gap-6 text-sm">
+            <Link
+              href="/battle"
+              className="text-white/60 transition-colors hover:text-white"
+            >
+              <ScrambleHover
+                text="Battle"
+                scrambleSpeed={40}
+                maxIterations={6}
+                className="cursor-pointer"
+              />
+            </Link>
+            <Link
+              href="/teambuilder"
+              className="text-white/60 transition-colors hover:text-white"
+            >
+              <ScrambleHover
+                text="Teambuilder"
+                scrambleSpeed={40}
+                maxIterations={6}
+                className="cursor-pointer"
+              />
+            </Link>
+            <UserButton afterSignOutUrl="/" />
+          </div>
+        </nav>
+
+        {/* ── Shaped Bento Hero ── */}
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.4fr_1fr]">
+          {/* ─ Left panel: sub1.png mask ─ */}
           <div
-            className={`${bentoCard} relative overflow-hidden lg:col-span-7`}
+            className="relative min-h-[520px] border border-white/10 bg-white/5 px-8 pb-8 pt-18 backdrop-blur-md lg:min-h-[560px]"
+            style={{
+              ...maskBase,
+              WebkitMaskImage: "url(/sub1.png)",
+              maskImage: "url(/sub1.png)",
+            }}
           >
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_65%_15%,rgba(0,21,255,0.18),transparent_45%)]" />
-            <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.04)_1px,transparent_1px)] bg-[size:40px_40px] opacity-25" />
-            <div className="relative">
-              <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/15 px-3 py-1 text-xs tracking-[0.16em] text-white/85">
-                SHOWDOWN TRAINER
-              </div>
-              <div className="max-w-2xl uppercase leading-[0.95] tracking-tight">
+            {/* Top: hero text + tags */}
+            <div>
+              <div className="max-w-md uppercase leading-[0.95] tracking-tight">
                 <TextCursorProximity
-                  className="block text-3xl font-semibold text-white sm:text-5xl lg:text-6xl"
+                  className="block text-3xl font-bold text-white sm:text-5xl"
                   styles={proximityStyles.title}
                   falloff="gaussian"
                   radius={110}
-                  containerRef={heroRef}
+                  containerRef={pageRef}
                 >
                   Build Your Team
                 </TextCursorProximity>
                 <TextCursorProximity
-                  className="block text-3xl font-semibold sm:text-5xl lg:text-6xl"
+                  className="block text-3xl font-bold sm:text-5xl"
                   styles={proximityStyles.title}
                   falloff="gaussian"
                   radius={110}
-                  containerRef={heroRef}
-                  style={{ color: brandBlue }}
+                  containerRef={pageRef}
+                  style={{ color: BRAND }}
                 >
                   Train With AI
                 </TextCursorProximity>
               </div>
-
-              <div className="mt-8 flex flex-wrap gap-2">
-                <button
-                  onClick={() => setMode("interactive")}
-                  className={tabClass(mode === "interactive")}
-                  style={
-                    mode === "interactive"
-                      ? { backgroundColor: brandBlue }
-                      : undefined
-                  }
-                >
-                  Interactive Battle
-                </button>
-                <button
-                  onClick={() => setMode("demo")}
-                  className={tabClass(mode === "demo")}
-                >
-                  Auto Battle Demo
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className={`${bentoCard} lg:col-span-5`}>
-            <div className="text-xs tracking-[0.18em] text-white/40">
-              CORE MODES - Click to begin
-            </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              {[
-                {
-                  title: "Teambuilder",
-                  desc: "Create custom teams and move sets before queueing into battles.",
-                  href: "/teambuilder",
-                },
-                {
-                  title: "Battle AI",
-                  desc: "Fight an AI trainer and get live CPU reasoning after each turn.",
-                },
-                {
-                  title: "AI vs AI",
-                  desc: "Simulate matchups automatically to test strategy and move quality.",
-                },
-                {
-                  title: "Live Recommendations",
-                  desc: "AI trainer suggestions during battle based on current board state.",
-                },
-              ].map((card, i) => {
-                const cardContent = (
-                  <>
-                    <div className="text-sm font-semibold text-white">
-                      {card.title}
-                    </div>
-                    <p className="mt-2 text-xs leading-relaxed text-white/55">
-                      {card.desc}
-                    </p>
-                  </>
-                );
-
-                return (
-                  <div
-                    key={card.title}
-                    className={`rounded-xl border p-4 ${
-                      i === 1 || i === 3
-                        ? "border-white/15"
-                        : "border-white/10 bg-black/35"
-                    }`}
-                    style={
-                      i === 1 || i === 3
-                        ? { backgroundColor: "rgba(0,21,255,0.08)" }
-                        : undefined
-                    }
+              <div className="mt-5 flex flex-wrap gap-2">
+                {TAGS.map((tag) => (
+                  <span
+                    key={tag}
+                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/55 transition-colors hover:border-white/20 hover:text-white/80"
                   >
-                    {card.href ? (
-                      <Link href={card.href}>{cardContent}</Link>
-                    ) : (
-                      cardContent
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className={`${bentoCard} lg:col-span-4`}>
-            <div className="text-xs tracking-[0.18em] text-white/40">
-              ELITE FOUR MODE
-            </div>
-            <div className="mt-3 text-2xl font-semibold tracking-tight text-white">
-              Fight Elite 4 • Any Region
-            </div>
-            <p className="mt-2 text-sm leading-relaxed text-white/55">
-              Planned progression mode with region presets, staged teams, and
-              run tracking.
-            </p>
-            <div className="mt-5 space-y-2">
-              {["Kanto", "Johto", "Hoenn", "Sinnoh", "Unova", "Paldea"].map(
-                (region) => (
-                  <div
-                    key={region}
-                    className="flex items-center justify-between rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
-                  >
-                    <span className="text-white/75">{region}</span>
-                    <span
-                      className="text-xs"
-                      style={{ color: "rgba(153, 168, 255, 0.9)" }}
-                    >
-                      Elite 4 + Champion
-                    </span>
-                  </div>
-                ),
-              )}
-            </div>
-          </div>
-
-          <div className={`${bentoCard} lg:col-span-8`}>
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div className="text-xs tracking-[0.18em] text-white/40">
-                AI TRAINER PANEL
-              </div>
-              <div
-                className="rounded-full border px-2 py-1 text-[11px]"
-                style={{
-                  borderColor: "rgba(0,21,255,0.22)",
-                  backgroundColor: "rgba(0,21,255,0.08)",
-                  color: "rgba(173, 186, 255, 0.95)",
-                }}
-              >
-                Live recommendations from AI
+                    {tag}
+                  </span>
+                ))}
               </div>
             </div>
-            <div className="grid gap-4 md:grid-cols-[1.2fr_1fr]">
-              <div className="rounded-xl border border-white/10 bg-black/40 p-4">
-                <div className="text-xs text-white/45">Decision Summary</div>
-                <div className="mt-2 text-lg font-semibold text-white">
-                  Selected move: Thunderbolt
+
+            {/* Bottom: featured Pokemon */}
+            <div className="mt-8 flex items-start justify-between">
+              <div>
+                <div className="flex gap-1.5">
+                  {POKEMON[0].types.map((t) => (
+                    <TypeChip key={t} type={t} />
+                  ))}
                 </div>
-                <p className="mt-2 text-sm leading-relaxed text-white/55">
-                  High-confidence neutral hit with KO pressure while preserving
-                  safer lines than Focus Blast into a resist pivot.
+                <div className="mt-3 text-4xl font-bold tracking-tight lg:text-5xl">
+                  <ScrambleHover
+                    text={POKEMON[0].name}
+                    scrambleSpeed={50}
+                    maxIterations={8}
+                    useOriginalCharsOnly
+                    className="cursor-default"
+                  />
+                </div>
+                <p className="mt-2 max-w-xs text-sm leading-relaxed text-white/50">
+                  The iconic Fire/Flying starter. Build your team around it and
+                  challenge the AI.
                 </p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {["Model", "Turn 7", "Latency 842ms"].map((badge) => (
-                    <span
-                      key={badge}
-                      className="rounded-full border border-white/10 bg-white/[0.02] px-2.5 py-1 text-xs text-white/60"
-                    >
-                      {badge}
-                    </span>
-                  ))}
-                </div>
               </div>
-              <div
-                className="rounded-xl border border-white/10 bg-gradient-to-b to-black p-4"
-                style={{
-                  backgroundImage:
-                    "linear-gradient(to bottom, rgba(0,21,255,0.10), rgba(0,0,0,1))",
-                }}
+              <Float
+                speed={0.3}
+                amplitude={[8, 15, 10]}
+                rotationRange={[5, 8, 3]}
               >
-                <div
-                  className="text-xs"
-                  style={{ color: "rgba(173, 186, 255, 0.95)" }}
+                <img
+                  src={spriteGif(POKEMON[0].name)}
+                  alt={POKEMON[0].name}
+                  className="h-36 w-36 object-contain drop-shadow-[0_0_40px_rgba(255,120,0,0.3)] lg:h-48 lg:w-48"
+                  onError={(e) => {
+                    e.currentTarget.src = spritePng(POKEMON[0].name);
+                  }}
+                />
+              </Float>
+            </div>
+          </div>
+
+          {/* ─ Right panel: sub2.png mask ─ */}
+          <div
+            className="relative min-h-[520px] border border-white/10 bg-white/5 px-8 pb-8 pt-18 backdrop-blur-md lg:min-h-[560px]"
+            style={{
+              ...maskBase,
+              WebkitMaskImage: "url(/sub2.png)",
+              maskImage: "url(/sub2.png)",
+            }}
+          >
+            <div className="flex h-full flex-col justify-between">
+              {/* Welcome + Description */}
+              <div>
+                <div className="text-[10px] font-medium tracking-[0.18em] text-white/40">
+                  WELCOME
+                </div>
+                <p className="mt-3 max-w-sm text-sm leading-relaxed text-white/70">
+                  Build your dream team, battle an AI opponent with real-time
+                  reasoning, and sharpen your competitive strategy.
+                </p>
+                <p className="mt-2 max-w-sm text-sm leading-relaxed text-white/50">
+                  Powered by Pokemon Showdown&apos;s battle engine with live
+                  move analysis after every turn.
+                </p>
+                <Link
+                  href="/battle"
+                  className="group mt-4 flex items-center gap-2 text-sm font-medium text-white/60 transition-colors hover:text-white"
                 >
-                  Turn Flow
+                  Get started
+                  <span className="transition-transform group-hover:translate-x-1">
+                    →
+                  </span>
+                </Link>
+              </div>
+
+              {/* CTA + Pokemon showcase */}
+              <div className="mt-6 flex items-end justify-between gap-4">
+                <div>
+                  <div className="text-lg font-bold tracking-tight">
+                    Start Battle
+                  </div>
+                  <p className="mt-1 text-xs text-white/45">
+                    Challenge the AI in a competitive match.
+                  </p>
+                  <Link
+                    href="/battle"
+                    className="mt-4 inline-flex rounded-full px-6 py-2.5 text-sm font-semibold text-white transition-all hover:scale-105 hover:shadow-[0_0_30px_-5px_rgba(0,21,255,0.6)]"
+                    style={{ backgroundColor: BRAND }}
+                  >
+                    Play Now
+                  </Link>
                 </div>
-                <div className="mt-3 space-y-2">
-                  {[
-                    "You selected Shadow Ball",
-                    "CPU chooses a response",
-                    "Turn resolves sequentially",
-                    "Logs + HP update from backend state",
-                  ].map((step, i) => (
-                    <div
-                      key={step}
-                      className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/45 px-3 py-2 text-xs text-white/70"
-                    >
-                      <span
-                        className="flex h-5 w-5 items-center justify-center rounded-full border text-[10px]"
-                        style={{
-                          borderColor: "rgba(0,21,255,0.3)",
-                          backgroundColor: "rgba(0,21,255,0.08)",
-                          color: "rgba(173, 186, 255, 0.95)",
-                        }}
-                      >
-                        {i + 1}
-                      </span>
-                      <span>{step}</span>
-                    </div>
-                  ))}
-                </div>
+                <Float
+                  speed={0.25}
+                  amplitude={[6, 10, 8]}
+                  rotationRange={[4, 6, 2]}
+                  timeOffset={2}
+                >
+                  <img
+                    src={spriteGif(POKEMON[3].name)}
+                    alt={POKEMON[3].name}
+                    className="h-28 w-28 object-contain drop-shadow-[0_0_25px_rgba(100,100,255,0.2)] lg:h-36 lg:w-36"
+                    onError={(e) => {
+                      e.currentTarget.src = spritePng(POKEMON[3].name);
+                    }}
+                  />
+                </Float>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Interactive Battle */}
-        {mode === "interactive" && <InteractiveBattle />}
-
-        {/* Demo Mode */}
-        {mode === "demo" && (
-          <>
-            {/* Pokemon Cards */}
-            <div className="grid md:grid-cols-2 gap-6 mb-8">
-              {/* Gengar Card */}
-              {gengarData && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 backdrop-blur">
-                  <div className="flex items-center gap-4 mb-4">
-                    <div className="relative">
-                      <img
-                        src={`https://play.pokemonshowdown.com/sprites/gen5ani/${gengarData.name.toLowerCase()}.gif`}
-                        alt={gengarData.name}
-                        className="w-24 h-24 object-contain"
-                        onError={(e) => {
-                          e.currentTarget.src = `https://play.pokemonshowdown.com/sprites/gen5/${gengarData.name.toLowerCase()}.png`;
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <h2 className="text-2xl font-semibold text-white">
-                        {gengarData.name}
-                      </h2>
-                      <div className="flex gap-2 mt-2">
-                        {gengarData.types.map((type) => (
-                          <span
-                            key={type}
-                            className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-white/75"
-                          >
-                            {type}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-3 mt-4">
-                    <div className="rounded-xl border border-white/10 bg-black/40 p-3 text-center">
-                      <div className="text-xs text-white/45">HP</div>
-                      <div className="text-xl font-semibold text-white">
-                        {gengarData.baseStats.hp}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-black/40 p-3 text-center">
-                      <div className="text-xs text-white/45">SpA</div>
-                      <div className="text-xl font-semibold text-white">
-                        {gengarData.baseStats.spa}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-black/40 p-3 text-center">
-                      <div className="text-xs text-white/45">Spe</div>
-                      <div className="text-xl font-semibold text-white">
-                        {gengarData.baseStats.spe}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-4 text-sm text-white/55">
-                    Tier: {gengarData.tier} • Weight: {gengarData.weightkg}kg
-                  </div>
+        {/* ── Pokemon Showcase Strip ── */}
+        <div className="mt-5 grid grid-cols-2 gap-4 md:grid-cols-4">
+          {POKEMON.map((mon, i) => (
+            <div
+              key={mon.name}
+              className={`${glass} flex items-center gap-3 p-4 transition-colors hover:border-white/20`}
+            >
+              <img
+                src={spriteGif(mon.name)}
+                alt={mon.name}
+                className="h-14 w-14 object-contain"
+                onError={(e) => {
+                  e.currentTarget.src = spritePng(mon.name);
+                }}
+              />
+              <div>
+                <div className="text-sm font-semibold">
+                  <ScrambleHover
+                    text={mon.name}
+                    scrambleSpeed={50}
+                    maxIterations={6}
+                    useOriginalCharsOnly
+                    className="cursor-default"
+                  />
                 </div>
-              )}
-
-              {/* Charizard Card */}
-              {charizardData && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 backdrop-blur">
-                  <div className="flex items-center gap-4 mb-4">
-                    <div className="relative">
-                      <img
-                        src={`https://play.pokemonshowdown.com/sprites/gen5ani/${charizardData.name.toLowerCase()}.gif`}
-                        alt={charizardData.name}
-                        className="w-24 h-24 object-contain"
-                        onError={(e) => {
-                          e.currentTarget.src = `https://play.pokemonshowdown.com/sprites/gen5/${charizardData.name.toLowerCase()}.png`;
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <h2 className="text-2xl font-semibold text-white">
-                        {charizardData.name}
-                      </h2>
-                      <div className="flex gap-2 mt-2">
-                        {charizardData.types.map((type) => (
-                          <span
-                            key={type}
-                            className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-white/75"
-                          >
-                            {type}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-3 mt-4">
-                    <div className="rounded-xl border border-white/10 bg-black/40 p-3 text-center">
-                      <div className="text-xs text-white/45">HP</div>
-                      <div className="text-xl font-semibold text-white">
-                        {charizardData.baseStats.hp}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-black/40 p-3 text-center">
-                      <div className="text-xs text-white/45">SpA</div>
-                      <div className="text-xl font-semibold text-white">
-                        {charizardData.baseStats.spa}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-black/40 p-3 text-center">
-                      <div className="text-xs text-white/45">Spe</div>
-                      <div className="text-xl font-semibold text-white">
-                        {charizardData.baseStats.spe}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-4 text-sm text-white/55">
-                    Tier: {charizardData.tier} • Weight:{" "}
-                    {charizardData.weightkg}kg
-                  </div>
+                <div className="mt-1 flex gap-1">
+                  {mon.types.map((t) => (
+                    <TypeChip key={t} type={t} />
+                  ))}
                 </div>
-              )}
-            </div>
-
-            {/* Battle Simulation */}
-            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 backdrop-blur">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-semibold text-white">
-                  Battle Simulation
-                </h2>
-                <button
-                  onClick={() => refetchBattle()}
-                  disabled={battleLoading}
-                  className="rounded-lg border border-white/15 bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {battleLoading ? "Battling..." : "New Battle"}
-                </button>
               </div>
+            </div>
+          ))}
+        </div>
 
-              {battleError && (
-                <div className="mb-4 rounded-lg border border-white/10 bg-white/[0.03] p-4 text-sm text-white/70">
-                  Error loading battle: {(battleError as Error).message}
-                </div>
-              )}
+        {/* ── Feature Cards ── */}
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+          <Link
+            href="/teambuilder"
+            className={`${glass} p-5 transition-colors hover:border-white/20`}
+          >
+            <div className="text-[10px] font-medium tracking-[0.18em] text-white/40">
+              TEAMBUILDER
+            </div>
+            <div className="mt-2 text-base font-semibold">
+              Create Custom Teams
+            </div>
+            <p className="mt-1.5 text-xs leading-relaxed text-white/50">
+              Build and save teams with custom move sets, EVs, and items before
+              queueing into battles.
+            </p>
+          </Link>
 
-              {battleLoading && (
-                <div className="text-center py-12">
-                  <div className="mb-4 inline-block animate-spin text-4xl text-white/80">
-                    ⚔️
-                  </div>
-                  <div className="text-lg text-white/70">
-                    Battle in progress...
-                  </div>
-                </div>
-              )}
-
-              {battleData && (
-                <>
-                  {/* Battle Result */}
-                  <div className="mb-6 rounded-xl border border-white/10 bg-black/40 p-6">
-                    <div className="text-center">
-                      <div className="mb-2 text-xs font-medium tracking-[0.2em] text-white/40">
-                        BATTLE RESULT
-                      </div>
-                      <div className="mb-2 text-3xl font-semibold text-white">
-                        {battleData.winner} Wins!
-                      </div>
-                      <div className="text-sm text-white/55">
-                        Battle completed in {battleData.turns} turn
-                        {battleData.turns !== 1 ? "s" : ""}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Battle Log */}
-                  <div>
-                    <h3 className="mb-4 text-sm font-medium tracking-wide text-white/70">
-                      Battle Log
-                    </h3>
-                    <div className="rounded-xl border border-white/10 bg-black/50 p-6 font-mono text-sm">
-                      <pre className="whitespace-pre-wrap leading-relaxed text-white/80">
-                        {battleData.formattedLog}
-                      </pre>
-                    </div>
-                  </div>
-                </>
+          <div
+            className="rounded-3xl border border-white/15 p-5 backdrop-blur-md"
+            style={{
+              background: `linear-gradient(160deg, ${BRAND}10, transparent)`,
+            }}
+          >
+            <div className="text-[10px] font-medium tracking-[0.18em] text-white/40">
+              ELITE FOUR MODE
+            </div>
+            <div className="mt-2 text-base font-semibold">
+              Fight Elite 4 &bull; Any Region
+            </div>
+            <p className="mt-1.5 text-xs leading-relaxed text-white/50">
+              Progression mode with region presets, staged teams, and run
+              tracking.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {["Kanto", "Johto", "Hoenn", "Sinnoh", "Unova", "Paldea"].map(
+                (r) => (
+                  <span
+                    key={r}
+                    className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-white/45"
+                  >
+                    {r}
+                  </span>
+                ),
               )}
             </div>
-          </>
-        )}
+          </div>
 
-        <div className="mt-8 text-center text-xs text-white/35">
-          Powered by Pokemon Showdown • NestJS API running on port 5200
+          <div className={`${glass} p-5`}>
+            <div className="text-[10px] font-medium tracking-[0.18em] text-white/40">
+              AI TRAINER
+            </div>
+            <div className="mt-2 text-base font-semibold">
+              Live CPU Reasoning
+            </div>
+            <p className="mt-1.5 text-xs leading-relaxed text-white/50">
+              See exactly why the AI chose each move with confidence scores,
+              matchup analysis, and alternative plays.
+            </p>
+            <div
+              className="mt-3 inline-flex rounded-full border px-2.5 py-1 text-[10px]"
+              style={{
+                borderColor: `${BRAND}33`,
+                backgroundColor: `${BRAND}12`,
+                color: "rgba(173,186,255,0.95)",
+              }}
+            >
+              Powered by AI analysis
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="mt-10 pb-6 text-center text-xs text-white/25">
+          Powered by Pokemon Showdown &bull; Built with Next.js &amp; NestJS
         </div>
       </div>
     </div>

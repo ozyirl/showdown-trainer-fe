@@ -1,5 +1,6 @@
 "use client";
 
+import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -28,6 +29,7 @@ type BattlePokemonState = {
   boosts?: Record<string, number> | null;
   item?: string | null;
   ability?: string | null;
+  types?: string[] | null;
 };
 
 type BattleMove = {
@@ -36,6 +38,8 @@ type BattleMove = {
   name: string;
   type: string;
   power: number | null;
+  accuracy: number | true | null;
+  category: string | null;
   pp: number;
   maxPp: number;
 };
@@ -44,10 +48,14 @@ type BattleSwitchOption = {
   choice: string;
   slot: number;
   name: string;
+  hp: number;
+  maxHp: number;
   hpPercent: number;
   status: string | null;
   fainted: boolean;
   isActive: boolean;
+  item: string | null;
+  ability: string | null;
 };
 
 type BattleSideState = {
@@ -120,6 +128,9 @@ type PlaybackEvent = {
   target?: string | null;
   hpPercent?: number | null;
   deltaPercent?: number | null;
+  currentHp?: number | null;
+  maxHp?: number | null;
+  deltaHp?: number | null;
   sourceType?: string | null;
   sourceName?: string | null;
   payload: unknown;
@@ -410,6 +421,9 @@ function normalizePlaybackEvent(raw: unknown): PlaybackEvent | null {
   const sourceName = pickStringValue(data, payload, "sourceName");
   const hpPercent = pickNumberValue(data, payload, "hpPercent");
   const deltaPercent = pickNumberValue(data, payload, "deltaPercent");
+  const currentHp = pickNumberValue(data, payload, "currentHp");
+  const maxHp = pickNumberValue(data, payload, "maxHp");
+  const deltaHp = pickNumberValue(data, payload, "deltaHp");
 
   return {
     seq,
@@ -421,6 +435,9 @@ function normalizePlaybackEvent(raw: unknown): PlaybackEvent | null {
     target,
     hpPercent,
     deltaPercent,
+    currentHp,
+    maxHp,
+    deltaHp,
     sourceType,
     sourceName,
     payload: raw,
@@ -614,9 +631,9 @@ async function postBattleAction(params: {
   return response.json() as Promise<BattleState>;
 }
 
-function formatTurnLogEntry(entry: BattleState["turnLog"][number]) {
+function formatTurnLogEntry(entry: BattleState["turnLog"][number], p1Name = "You") {
   if (typeof entry === "string") return entry;
-  const actor = entry.player === "p1" ? "You" : "Opponent";
+  const actor = entry.player === "p1" ? p1Name : "Opponent";
   return `${actor} selected ${entry.moveName} (#${entry.moveIndex}).`;
 }
 
@@ -637,8 +654,9 @@ function normalizeHpLogLine(line: string) {
 function buildDisplayLog(
   turnLog: BattleState["turnLog"],
   localActions: string[],
+  p1Name = "You",
 ) {
-  const merged = [...localActions, ...turnLog.map(formatTurnLogEntry)];
+  const merged = [...localActions, ...turnLog.map((e) => formatTurnLogEntry(e, p1Name))];
   const out: string[] = [];
 
   for (const line of merged) {
@@ -868,10 +886,10 @@ function getMoveActorFromLine(
   return null;
 }
 
-function formatLastAction(lastAction: BattleState["lastAction"]) {
+function formatLastAction(lastAction: BattleState["lastAction"], p1Name = "You") {
   if (!lastAction) return null;
   if (typeof lastAction === "string") return lastAction;
-  return formatTurnLogEntry(lastAction);
+  return formatTurnLogEntry(lastAction, p1Name);
 }
 
 function canPlayerAct(state: BattleState | null, isSubmitting: boolean) {
@@ -909,8 +927,9 @@ function deriveStatusText(params: {
   pendingActionLabel: string | null;
   isSubmitting: boolean;
   errorMessage: string | null;
+  p1Name?: string;
 }) {
-  const { state, pendingActionLabel, isSubmitting, errorMessage } = params;
+  const { state, pendingActionLabel, isSubmitting, errorMessage, p1Name } = params;
 
   if (errorMessage) return `Error: ${errorMessage}`;
   if (!state) return "Loading battle state...";
@@ -922,14 +941,14 @@ function deriveStatusText(params: {
   }
   if (isSubmitting) return "CPU is choosing an action...";
   if (state.awaitingAckEventSeq != null || state.phase === "awaiting-event-ack") {
-    return `Rendering event #${state.awaitingAckEventSeq ?? "?"}...`;
+    return "Playing back events...";
   }
   if (state.phase === "team-preview") return "Choose team order (e.g. 123456).";
   if (state.phase === "resolving") return "Resolving turn...";
   if (state.phase === "awaiting-forced-switch-p1")
     return "Forced switch: choose your next Pokémon.";
   if (state.phase === "awaiting-forced-switch-p2")
-    return "Waiting for backend choice phase (opponent forced switch)...";
+    return "Opponent is choosing...";
   const hasMoves = state.availableMoves.length > 0;
   const hasSwitches = (state.availableSwitches?.length ?? 0) > 0;
   if (sideNeedsMove(state, "p1") && !hasMoves && hasSwitches) {
@@ -941,11 +960,11 @@ function deriveStatusText(params: {
     state.phase !== "team-preview" &&
     !sideNeedsMove(state, "p1")
   ) {
-    return "Waiting for forced action / recharge resolution...";
+    return "Processing...";
   }
   if (sideNeedsMove(state, "p2")) return "Waiting for opponent...";
   if (sideNeedsMove(state, "p1")) return "Choose your action.";
-  return formatLastAction(state.lastAction) ?? "Battle in progress...";
+  return formatLastAction(state.lastAction, p1Name) ?? "Battle in progress...";
 }
 
 function getHpBarClass(percentage: number) {
@@ -1007,9 +1026,12 @@ function getPokeApiFallbackUrl(name: string): string {
 
 function formatItemName(item: string | null | undefined): string | null {
   if (!item) return null;
-  const id = item.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (!id) return null;
-  return item.charAt(0).toUpperCase() + item.slice(1);
+  const trimmed = item.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes(" ") || trimmed.charAt(0) === trimmed.charAt(0).toUpperCase()) {
+    return trimmed;
+  }
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 
 function isControlEvent(type: string) {
@@ -1019,6 +1041,7 @@ function isControlEvent(type: string) {
     upper === "REQUEST_SWITCH" ||
     upper === "TURN_END" ||
     upper === "TURN_START" ||
+    upper === "TURN" ||
     upper === "PAUSE" ||
     upper === "FORCED_SWITCH_REQUIRED"
   );
@@ -1414,6 +1437,7 @@ function BattleArena(params: {
   awaitingAckEventSeq: number | null;
   collapsedTurns: Record<number, boolean>;
   playbackError: string | null;
+  playerName: string;
   onToggleTurnCollapse: (turn: number) => void;
   onSubmitAction: (params: {
     choice: string;
@@ -1438,6 +1462,7 @@ function BattleArena(params: {
     awaitingAckEventSeq,
     collapsedTurns,
     playbackError,
+    playerName,
     onToggleTurnCollapse,
     onSubmitAction,
     onContinue,
@@ -1502,7 +1527,7 @@ function BattleArena(params: {
             {[
               {
                 key: "p1" as const,
-                label: "Your Pokémon",
+                label: `${playerName}'s Pokémon`,
                 p: battleState.p1Pokemon,
               },
               {
@@ -1517,7 +1542,7 @@ function BattleArena(params: {
               const isUnknown = !p.name || p.name === "Unknown";
 
               return (
-                <div key={label} className={panelClass}>
+                <div key={label} className={`${panelClass} group relative`}>
                   <div className="mb-3 flex items-center justify-between">
                     <span className="text-sm font-medium text-white/60">{label}</span>
                     {p.ability && (
@@ -1560,7 +1585,7 @@ function BattleArena(params: {
                       </div>
                       <div className="flex justify-between text-xs text-white/60">
                         <span>HP</span>
-                        <span>{currentHpPercents[key]}%</span>
+                        <span>{Math.round(p.hp)}/{Math.round(p.maxHp)}</span>
                       </div>
                       <div className="h-2.5 w-full rounded-full bg-white/10">
                         <div
@@ -1591,6 +1616,21 @@ function BattleArena(params: {
                       </div>
                     </div>
                   </div>
+                  {!isUnknown && (
+                    <div className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1 hidden w-56 -translate-x-1/2 rounded-lg border border-white/15 bg-zinc-900 p-3 text-xs shadow-xl group-hover:block">
+                      {p.types && p.types.length > 0 && (
+                        <div className="mb-1.5 flex gap-1">
+                          {p.types.map((t) => (
+                            <span key={t} className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-white/80">{t}</span>
+                          ))}
+                        </div>
+                      )}
+                      {p.ability && <div className="text-white/60">Ability: <span className="text-white/90">{p.ability}</span></div>}
+                      {p.item && <div className="text-white/60">Item: <span className="text-white/90">{p.item}</span></div>}
+                      <div className="text-white/60">HP: <span className="text-white/90">{Math.round(p.hp)}/{Math.round(p.maxHp)}</span></div>
+                      {p.status && <div className="text-white/60">Status: <span className="text-white/90">{p.status}</span></div>}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1642,6 +1682,13 @@ function BattleArena(params: {
                   <div className="text-xs uppercase tracking-wide text-white/45">
                     Moves
                   </div>
+                  {battleState.availableMoves?.length === 1 &&
+                    battleState.p1Pokemon.item &&
+                    /choice/i.test(battleState.p1Pokemon.item) && (
+                      <div className="mb-2 rounded-md border border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-300">
+                        🔒 Locked into {battleState.availableMoves[0]?.name} by {battleState.p1Pokemon.item}
+                      </div>
+                    )}
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     {battleState.availableMoves.map((move, index) => {
                       const choice = move.choice ?? `move ${move.index ?? index + 1}`;
@@ -1663,9 +1710,11 @@ function BattleArena(params: {
                           <div className="text-sm font-medium tracking-tight text-white">
                             {move.name}
                           </div>
-                          <div className="mt-1 text-xs text-white/55">
-                            {move.type}
-                            {move.power ? ` • Power ${move.power}` : ""}
+                          <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-white/55">
+                            <span>{move.type}</span>
+                            {move.category && <span>{move.category}</span>}
+                            {move.power ? <span>BP {move.power}</span> : null}
+                            <span>Acc {move.accuracy === true ? "—" : move.accuracy ?? "—"}</span>
                           </div>
                           <div className="mt-1 text-xs text-white/40">
                             PP {move.pp}/{move.maxPp}
@@ -1695,11 +1744,28 @@ function BattleArena(params: {
                         disabled={!playerCanAct}
                         className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 text-left transition-colors hover:border-white/20 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
                       >
-                        <div className="text-sm font-medium tracking-tight text-white">
-                          {option.name}
-                        </div>
-                        <div className="mt-1 text-xs text-white/55">
-                          HP {option.hpPercent}%{option.status ? ` • ${option.status}` : ""}
+                        <div className="flex items-center gap-2">
+                          <img
+                            src={getSpriteFallbackUrl(option.name)}
+                            alt={option.name}
+                            className="h-8 w-8 object-contain"
+                            onError={(e) => {
+                              e.currentTarget.style.display = "none";
+                            }}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium tracking-tight text-white">
+                              {option.name}
+                            </div>
+                            <div className="mt-0.5 text-xs text-white/55">
+                              HP {Math.round(option.hp ?? 0)}/{Math.round(option.maxHp ?? 0)}
+                              {option.status ? ` • ${option.status}` : ""}
+                            </div>
+                            <div className="mt-0.5 flex flex-wrap gap-x-1.5 text-[10px] text-white/40">
+                              {option.ability && <span>{option.ability}</span>}
+                              {option.item && <span>📦 {option.item}</span>}
+                            </div>
+                          </div>
                         </div>
                       </button>
                     ))}
@@ -1749,38 +1815,10 @@ function BattleArena(params: {
         </div>
       )}
 
-        <div className={`${panelClass} space-y-3`}>
-          <div className="text-sm font-medium text-white/70">CPU Analysis</div>
-          {battleState.lastCpuDecision ? (
-            <>
-              <div className="grid grid-cols-2 gap-2 text-xs text-white/55">
-                <div>Source: {battleState.lastCpuDecision.source ?? "unknown"}</div>
-                <div>
-                  Latency:{" "}
-                  {typeof battleState.lastCpuDecision.latencyMs === "number"
-                    ? `${battleState.lastCpuDecision.latencyMs}ms`
-                    : "n/a"}
-                </div>
-                <div className="col-span-2 truncate">
-                  Choice: {battleState.lastCpuDecision.choice ?? "n/a"}
-                </div>
-                <div className="col-span-2">
-                  Type: {battleState.lastCpuDecision.actionType ?? "unknown"}
-                </div>
-              </div>
-              {cpuReasoning && (
-                <div className="rounded-lg border border-white/10 bg-black/40 p-3 text-xs text-white/70">
-                  {cpuReasoning}
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="text-sm text-white/50">No CPU decision data yet.</div>
-          )}
-        </div>
       </div>
 
-        <div className={`${panelClass} flex h-[72vh] flex-col`}>
+        <div className="flex h-[72vh] flex-col gap-4">
+          <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-medium tracking-wide text-white/70">
               Turn Logger
@@ -1831,22 +1869,8 @@ function BattleArena(params: {
                                 : "text-white/60"
                           }`}
                         >
-                          <div className="flex items-start gap-2">
-                            <span
-                              className={`mt-0.5 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${eventBadgeClass(
-                                event.type,
-                              )}`}
-                            >
-                              {event.type}
-                            </span>
-                            <div className="min-w-0">
-                              <div>{event.text}</div>
-                              {(event.description || getEventDeltaLabel(event)) && (
-                                <div className="text-xs text-white/55">
-                                  {event.description ?? getEventDeltaLabel(event)}
-                                </div>
-                              )}
-                            </div>
+                          <div>
+                            <div>{event.text}</div>
                           </div>
                         </div>
                       ))}
@@ -1857,6 +1881,37 @@ function BattleArena(params: {
                 <div className="text-sm text-white/50">No events yet.</div>
               )}
             </div>
+          </div>
+          </div>
+
+          <div className={`${panelClass} shrink-0 space-y-3`}>
+            <div className="text-sm font-medium text-white/70">CPU Analysis</div>
+            {battleState.lastCpuDecision ? (
+              <>
+                <div className="grid grid-cols-2 gap-2 text-xs text-white/55">
+                  <div>Source: {battleState.lastCpuDecision.source ?? "unknown"}</div>
+                  <div>
+                    Latency:{" "}
+                    {typeof battleState.lastCpuDecision.latencyMs === "number"
+                      ? `${battleState.lastCpuDecision.latencyMs}ms`
+                      : "n/a"}
+                  </div>
+                  <div className="col-span-2 truncate">
+                    Choice: {battleState.lastCpuDecision.choice ?? "n/a"}
+                  </div>
+                  <div className="col-span-2">
+                    Type: {battleState.lastCpuDecision.actionType ?? "unknown"}
+                  </div>
+                </div>
+                {cpuReasoning && (
+                  <div className="rounded-lg border border-white/10 bg-black/40 p-3 text-xs text-white/70">
+                    {cpuReasoning}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="text-sm text-white/50">No CPU decision data yet.</div>
+            )}
           </div>
         </div>
       </div>
@@ -1869,6 +1924,8 @@ export function InteractiveBattle({
 }: InteractiveBattleProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const { user } = useUser();
+  const playerName = user?.firstName ?? user?.username ?? "You";
   const [setup, setSetup] = useState<BattleSetupState>({
     randomTeams: true,
     randomTeamFormatid: "gen9randombattle",
@@ -2460,13 +2517,13 @@ export function InteractiveBattle({
         seq: index + 1,
         turn: liveBattleState.currentTurn,
         type: "TURN_LOG",
-        text: formatTurnLogEntry(entry),
+        text: formatTurnLogEntry(entry, playerName),
         payload: entry,
         timestamp: Date.now(),
       }),
     );
     return buildTurnLogGroups(fallbackEvents).slice(-20);
-  }, [playbackEvents, liveBattleState]);
+  }, [playbackEvents, liveBattleState, playerName]);
 
   const derivedStatusText = deriveStatusText({
     state: liveBattleState,
@@ -2474,6 +2531,7 @@ export function InteractiveBattle({
     isSubmitting:
       submitActionMutation.isPending || isPlaybackRunning || isSubmittingMove,
     errorMessage: moveUiError,
+    p1Name: playerName,
   });
   const statusText = animatedStatusText ?? derivedStatusText;
 
@@ -2527,6 +2585,7 @@ export function InteractiveBattle({
         awaitingAckEventSeq={liveBattleState.awaitingAckEventSeq ?? null}
         collapsedTurns={collapsedTurns}
         playbackError={playbackError}
+        playerName={playerName}
         onToggleTurnCollapse={toggleTurnCollapse}
         onSubmitAction={({ choice, label, moveIndex }) => {
           if (isSubmittingMoveRef.current) return;
@@ -2646,7 +2705,7 @@ export function InteractiveBattle({
         <div className="grid gap-6 lg:grid-cols-2">
           <PokemonSetupPanel
             side="p1"
-            label="Player Pokémon (P1)"
+            label={`${playerName}'s Pokémon`}
             setup={setup.p1}
             onQueryChange={(value) =>
               updateSide("p1", (prev) => ({ ...prev, query: value }))
