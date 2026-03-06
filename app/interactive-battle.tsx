@@ -22,6 +22,7 @@ type BattlePokemonState = {
   isActive?: boolean;
   fainted?: boolean;
   name: string;
+  level?: number;
   hp: number;
   maxHp: number;
   hpPercent?: number | null;
@@ -48,6 +49,7 @@ type BattleSwitchOption = {
   choice: string;
   slot: number;
   name: string;
+  level?: number;
   hp: number;
   maxHp: number;
   hpPercent: number;
@@ -1577,6 +1579,11 @@ function BattleArena(params: {
                         <span className="truncate text-lg font-semibold tracking-tight text-white">
                           {isUnknown ? "Switching..." : p.name}
                         </span>
+                        {!isUnknown && (
+                          <span className="shrink-0 text-xs font-medium text-white/40">
+                            Lv.{p.level ?? 100}
+                          </span>
+                        )}
                         {statusInfo && (
                           <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusInfo.colorClass}`}>
                             {statusInfo.emoji} {statusInfo.label}
@@ -1625,6 +1632,7 @@ function BattleArena(params: {
                           ))}
                         </div>
                       )}
+                      <div className="text-white/60">Level: <span className="text-white/90">{p.level ?? 100}</span></div>
                       {p.ability && <div className="text-white/60">Ability: <span className="text-white/90">{p.ability}</span></div>}
                       {p.item && <div className="text-white/60">Item: <span className="text-white/90">{p.item}</span></div>}
                       <div className="text-white/60">HP: <span className="text-white/90">{Math.round(p.hp)}/{Math.round(p.maxHp)}</span></div>
@@ -1754,8 +1762,9 @@ function BattleArena(params: {
                             }}
                           />
                           <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium tracking-tight text-white">
+                            <div className="flex items-center gap-1.5 text-sm font-medium tracking-tight text-white">
                               {option.name}
+                              <span className="text-[10px] font-normal text-white/40">Lv.{option.level ?? 100}</span>
                             </div>
                             <div className="mt-0.5 text-xs text-white/55">
                               HP {Math.round(option.hp ?? 0)}/{Math.round(option.maxHp ?? 0)}

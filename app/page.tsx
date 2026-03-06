@@ -196,23 +196,8 @@ export default function Home() {
             {/* Bottom: featured Pokemon */}
             <div className="mt-8 flex items-start justify-between">
               <div>
-                <div className="flex gap-1.5">
-                  {POKEMON[0].types.map((t) => (
-                    <TypeChip key={t} type={t} />
-                  ))}
-                </div>
-                <div className="mt-3 text-4xl font-bold tracking-tight lg:text-5xl">
-                  <ScrambleHover
-                    text={POKEMON[0].name}
-                    scrambleSpeed={50}
-                    maxIterations={8}
-                    useOriginalCharsOnly
-                    className="cursor-default"
-                  />
-                </div>
-                <p className="mt-2 max-w-xs text-sm leading-relaxed text-white/50">
-                  The iconic Fire/Flying starter. Build your team around it and
-                  challenge the AI.
+                <p className="mt-2 max-w-xs text-md font-semibold leading-relaxed text-white/50">
+                  Built by oz2ez
                 </p>
               </div>
               <Float
@@ -304,39 +289,6 @@ export default function Home() {
         </div>
 
         {/* ── Pokemon Showcase Strip ── */}
-        <div className="mt-5 grid grid-cols-2 gap-4 md:grid-cols-4">
-          {POKEMON.map((mon, i) => (
-            <div
-              key={mon.name}
-              className={`${glass} flex items-center gap-3 p-4 transition-colors hover:border-white/20`}
-            >
-              <img
-                src={spriteGif(mon.name)}
-                alt={mon.name}
-                className="h-14 w-14 object-contain"
-                onError={(e) => {
-                  e.currentTarget.src = spritePng(mon.name);
-                }}
-              />
-              <div>
-                <div className="text-sm font-semibold">
-                  <ScrambleHover
-                    text={mon.name}
-                    scrambleSpeed={50}
-                    maxIterations={6}
-                    useOriginalCharsOnly
-                    className="cursor-default"
-                  />
-                </div>
-                <div className="mt-1 flex gap-1">
-                  {mon.types.map((t) => (
-                    <TypeChip key={t} type={t} />
-                  ))}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
 
         {/* ── Feature Cards ── */}
         <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
