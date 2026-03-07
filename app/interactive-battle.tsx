@@ -112,12 +112,49 @@ type BattleState = {
   lastAction?: string | MoveAcceptedAction | null;
 };
 
+type CpuStreamDecisionSummary = {
+  turn: number;
+  choice: string;
+  actionType: string;
+  source: string;
+  modelId: string;
+  latencyMs: number;
+  reasoning?: string;
+  rawResponse?: string;
+  error?: string;
+};
+
+type CpuStreamState = {
+  text: string;
+  isStreaming: boolean;
+  isAvailable: boolean;
+  error: string | null;
+  decision: CpuStreamDecisionSummary | null;
+};
+
 type ActionSubmitError = {
   message: string;
   status?: number;
   legalChoices?: string[];
   legalMoves?: string[];
   legalSwitches?: string[];
+};
+
+type CopilotAlternative = {
+  action: string;
+  label: string;
+  reason: string;
+};
+
+type CopilotGuidance = {
+  recommendedAction: string;
+  recommendedLabel: string;
+  confidence: "high" | "medium" | "low";
+  reasoning: string;
+  safeAlternative: CopilotAlternative | null;
+  aggressiveAlternative: CopilotAlternative | null;
+  mainRisk: string;
+  winConditionNote: string;
 };
 
 type PlaybackEvent = {
@@ -321,6 +358,178 @@ async function fetchJson<T>(url: string): Promise<T> {
 
 async function fetchBattleState(battleId: string): Promise<BattleState> {
   return fetchJson<BattleState>(`${API_URL}/battle/${battleId}/state`);
+}
+
+function useCpuStream(battleId: string | null): CpuStreamState {
+  const [buffer, setBuffer] = useState("");
+  const [visibleLength, setVisibleLength] = useState(0);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [isAvailable, setIsAvailable] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [decision, setDecision] = useState<CpuStreamDecisionSummary | null>(null);
+
+  useEffect(() => {
+    if (!battleId) {
+      setBuffer("");
+      setVisibleLength(0);
+      setIsStreaming(false);
+      setError(null);
+      setDecision(null);
+      setIsAvailable(true);
+      return;
+    }
+
+    if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
+      setIsAvailable(false);
+      return;
+    }
+
+    setIsAvailable(true);
+    const eventSource = new window.EventSource(
+      `${API_URL}/battle/${battleId}/cpu-stream`,
+    );
+
+    const parseEvent = <T,>(event: MessageEvent<string>): T | null => {
+      try {
+        return JSON.parse(event.data) as T;
+      } catch {
+        return null;
+      }
+    };
+
+    const handleStart = (event: MessageEvent<string>) => {
+      const data = parseEvent<{ turn?: number }>(event);
+      if (!data) return;
+      setBuffer("");
+      setVisibleLength(0);
+      setIsStreaming(true);
+      setError(null);
+      setDecision(null);
+    };
+
+    const handleChunk = (event: MessageEvent<string>) => {
+      const data = parseEvent<{ content?: string }>(event);
+      if (!data?.content) return;
+      setBuffer((current) => current + data.content);
+      setIsStreaming(true);
+    };
+
+    const handleDone = (event: MessageEvent<string>) => {
+      const data = parseEvent<CpuStreamDecisionSummary>(event);
+      if (!data) return;
+      setDecision(data);
+      setIsStreaming(false);
+      if (typeof data.rawResponse === "string" && data.rawResponse.length > 0) {
+        setBuffer(data.rawResponse);
+      }
+    };
+
+    const handleModelError = (event: MessageEvent<string>) => {
+      const data = parseEvent<{ error?: string }>(event);
+      setError(data?.error ?? "CPU stream failed");
+      setIsStreaming(false);
+    };
+
+    eventSource.addEventListener("start", handleStart as EventListener);
+    eventSource.addEventListener("chunk", handleChunk as EventListener);
+    eventSource.addEventListener("done", handleDone as EventListener);
+    eventSource.addEventListener("model-error", handleModelError as EventListener);
+
+    return () => {
+      eventSource.removeEventListener("start", handleStart as EventListener);
+      eventSource.removeEventListener("chunk", handleChunk as EventListener);
+      eventSource.removeEventListener("done", handleDone as EventListener);
+      eventSource.removeEventListener(
+        "model-error",
+        handleModelError as EventListener,
+      );
+      eventSource.close();
+    };
+  }, [battleId]);
+
+  useEffect(() => {
+    if (visibleLength >= buffer.length) return;
+    const timeout = window.setTimeout(() => {
+      setVisibleLength((current) =>
+        Math.min(buffer.length, current + Math.max(1, Math.ceil((buffer.length - current) / 10))),
+      );
+    }, 18);
+    return () => window.clearTimeout(timeout);
+  }, [buffer, visibleLength]);
+
+  return {
+    text: buffer.slice(0, visibleLength),
+    isStreaming: isStreaming || visibleLength < buffer.length,
+    isAvailable,
+    error,
+    decision,
+  };
+}
+
+type CopilotHistoryEntry = {
+  turn: number;
+  phase: string;
+  guidance: CopilotGuidance;
+};
+
+async function fetchCopilotGuidance(
+  battleId: string,
+): Promise<CopilotGuidance> {
+  return fetchJson<CopilotGuidance>(`${API_URL}/battle/${battleId}/copilot`);
+}
+
+function useCopilotHistory(
+  battleId: string | null,
+  currentTurn: number,
+  phase: string | undefined,
+  shouldFetch: boolean,
+) {
+  const [history, setHistory] = useState<CopilotHistoryEntry[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const fetchedKeysRef = useRef(new Set<string>());
+  const inflightKeyRef = useRef<string | null>(null);
+
+  const requestKey = `${battleId}-${currentTurn}-${phase}`;
+
+  useEffect(() => {
+    if (!battleId || !shouldFetch) return;
+    if (fetchedKeysRef.current.has(requestKey)) return;
+    if (inflightKeyRef.current === requestKey) return;
+    inflightKeyRef.current = requestKey;
+
+    let cancelled = false;
+    setIsLoading(true);
+
+    fetchCopilotGuidance(battleId)
+      .then((guidance) => {
+        if (cancelled) return;
+        fetchedKeysRef.current.add(requestKey);
+        setHistory((prev) => [
+          ...prev,
+          { turn: currentTurn, phase: phase ?? "unknown", guidance },
+        ]);
+      })
+      .catch(() => {
+        // Allow retry on failure by not adding to fetchedKeysRef
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoading(false);
+          if (inflightKeyRef.current === requestKey) {
+            inflightKeyRef.current = null;
+          }
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (inflightKeyRef.current === requestKey) {
+        inflightKeyRef.current = null;
+      }
+    };
+  }, [battleId, currentTurn, phase, shouldFetch, requestKey]);
+
+  return { history, isLoading };
 }
 
 async function fetchBattleEvents(params: {
@@ -1425,8 +1634,103 @@ function PokemonSetupPanel(params: {
   );
 }
 
+function CopilotMessageCard({ entry }: { entry: CopilotHistoryEntry }) {
+  const g = entry.guidance;
+
+  return (
+    <div className="space-y-2 border-b border-white/5 pb-3 last:border-b-0">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-blue-400/60">
+          Turn {entry.turn}
+        </span>
+        <span
+          className={`ml-auto rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${
+            g.confidence === "high"
+              ? "bg-emerald-500/20 text-emerald-400"
+              : g.confidence === "medium"
+                ? "bg-amber-500/20 text-amber-400"
+                : "bg-red-500/20 text-red-400"
+          }`}
+        >
+          {g.confidence}
+        </span>
+      </div>
+
+      <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-2.5">
+        <div className="text-xs font-medium text-white">{g.recommendedLabel}</div>
+        <div className="mt-1 text-[11px] leading-relaxed text-white/60">
+          {g.reasoning}
+        </div>
+      </div>
+
+      {(g.safeAlternative || g.aggressiveAlternative) && (
+        <div className="flex gap-1.5">
+          {g.safeAlternative && (
+            <div className="flex-1 rounded-md border border-emerald-500/15 bg-emerald-500/5 px-2 py-1.5">
+              <div className="text-[9px] font-semibold uppercase text-emerald-400/60">
+                Safe
+              </div>
+              <div className="text-[11px] font-medium text-white/85">
+                {g.safeAlternative.label}
+              </div>
+              <div className="text-[10px] text-white/45">
+                {g.safeAlternative.reason}
+              </div>
+            </div>
+          )}
+          {g.aggressiveAlternative && (
+            <div className="flex-1 rounded-md border border-red-500/15 bg-red-500/5 px-2 py-1.5">
+              <div className="text-[9px] font-semibold uppercase text-red-400/60">
+                Aggro
+              </div>
+              <div className="text-[11px] font-medium text-white/85">
+                {g.aggressiveAlternative.label}
+              </div>
+              <div className="text-[10px] text-white/45">
+                {g.aggressiveAlternative.reason}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex gap-1.5 text-[10px]">
+        <div className="flex-1 rounded-md border border-amber-500/10 bg-amber-500/5 px-2 py-1">
+          <span className="font-semibold uppercase text-amber-400/60">Risk </span>
+          <span className="text-white/55">{g.mainRisk}</span>
+        </div>
+      </div>
+      <div className="text-[10px]">
+        <div className="rounded-md border border-purple-500/10 bg-purple-500/5 px-2 py-1">
+          <span className="font-semibold uppercase text-purple-400/60">Win con </span>
+          <span className="text-white/55">{g.winConditionNote}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CopilotLoadingCard() {
+  return (
+    <div className="space-y-2.5 border-b border-white/5 pb-3">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-blue-400/60">
+          Analyzing...
+        </span>
+        <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />
+      </div>
+      <div className="space-y-2">
+        <div className="h-3 w-3/4 animate-pulse rounded bg-white/10" />
+        <div className="h-3 w-1/2 animate-pulse rounded bg-white/10" />
+        <div className="h-3 w-2/3 animate-pulse rounded bg-white/8" />
+      </div>
+    </div>
+  );
+}
+
 function BattleArena(params: {
   battleState: BattleState;
+  cpuStream: CpuStreamState;
   visualHpPercents: { p1: number; p2: number } | null;
   isPlaybackRunning: boolean;
   isSubmittingMove: boolean;
@@ -1440,6 +1744,8 @@ function BattleArena(params: {
   collapsedTurns: Record<number, boolean>;
   playbackError: string | null;
   playerName: string;
+  copilotHistory: CopilotHistoryEntry[];
+  copilotLoading: boolean;
   onToggleTurnCollapse: (turn: number) => void;
   onSubmitAction: (params: {
     choice: string;
@@ -1452,6 +1758,7 @@ function BattleArena(params: {
 }) {
   const {
     battleState,
+    cpuStream,
     visualHpPercents,
     isPlaybackRunning,
     isSubmittingMove,
@@ -1465,6 +1772,8 @@ function BattleArena(params: {
     collapsedTurns,
     playbackError,
     playerName,
+    copilotHistory,
+    copilotLoading,
     onToggleTurnCollapse,
     onSubmitAction,
     onContinue,
@@ -1494,6 +1803,8 @@ function BattleArena(params: {
         : hpPercentFromStatePokemon(battleState.p2Pokemon),
   };
   const cpuReasoning = extractCpuReasoningText(battleState.lastCpuDecision);
+  const streamedCpuText = cpuStream.text.trim();
+  const cpuDecisionSummary = cpuStream.decision ?? battleState.lastCpuDecision;
 
   return (
     <div className="space-y-4">
@@ -1523,7 +1834,31 @@ function BattleArena(params: {
         </div>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)_300px] xl:grid-cols-[340px_minmax(0,1fr)_340px]">
+        <div className="flex h-[72vh] flex-col">
+          <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
+            <div className="mb-3 flex items-center gap-2">
+              <h3 className="text-sm font-medium tracking-wide text-white/70">
+                Battle Coach
+              </h3>
+              {copilotLoading && (
+                <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/20 border-t-blue-400" />
+              )}
+            </div>
+            <div className="flex-1 space-y-3 overflow-y-auto rounded-xl border border-white/10 bg-black/50 p-3">
+              {copilotHistory.length === 0 && !copilotLoading && (
+                <div className="text-xs text-white/40">
+                  Coach analysis will appear when it&apos;s your turn.
+                </div>
+              )}
+              {copilotHistory.map((entry, i) => (
+                <CopilotMessageCard key={`copilot-${i}`} entry={entry} />
+              ))}
+              {copilotLoading && <CopilotLoadingCard />}
+            </div>
+          </div>
+        </div>
+
         <div className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
             {[
@@ -1895,31 +2230,41 @@ function BattleArena(params: {
 
           <div className={`${panelClass} shrink-0 space-y-3`}>
             <div className="text-sm font-medium text-white/70">CPU Analysis</div>
-            {battleState.lastCpuDecision ? (
-              <>
+            {cpuStream.isStreaming || streamedCpuText || cpuDecisionSummary ? (
+              <div className="space-y-2">
                 <div className="grid grid-cols-2 gap-2 text-xs text-white/55">
-                  <div>Source: {battleState.lastCpuDecision.source ?? "unknown"}</div>
+                  <div>Source: {cpuDecisionSummary?.source ?? "streaming"}</div>
                   <div>
-                    Latency:{" "}
-                    {typeof battleState.lastCpuDecision.latencyMs === "number"
-                      ? `${battleState.lastCpuDecision.latencyMs}ms`
-                      : "n/a"}
+                    {cpuStream.isStreaming
+                      ? "Thinking..."
+                      : typeof cpuDecisionSummary?.latencyMs === "number"
+                        ? `${cpuDecisionSummary.latencyMs}ms`
+                        : ""}
                   </div>
                   <div className="col-span-2 truncate">
-                    Choice: {battleState.lastCpuDecision.choice ?? "n/a"}
+                    Chose: {cpuDecisionSummary?.choice ?? "pending"}
                   </div>
                   <div className="col-span-2">
-                    Type: {battleState.lastCpuDecision.actionType ?? "unknown"}
+                    Type: {cpuDecisionSummary?.actionType ?? "unknown"}
                   </div>
                 </div>
-                {cpuReasoning && (
+                {(streamedCpuText || cpuReasoning || cpuStream.error) && (
                   <div className="rounded-lg border border-white/10 bg-black/40 p-3 text-xs text-white/70">
-                    {cpuReasoning}
+                    <div className="whitespace-pre-wrap">
+                      {streamedCpuText || cpuReasoning || cpuStream.error}
+                      {cpuStream.isStreaming ? (
+                        <span className="ml-1 inline-block h-3 w-1 animate-pulse bg-white/60 align-middle" />
+                      ) : null}
+                    </div>
                   </div>
                 )}
-              </>
+              </div>
             ) : (
-              <div className="text-sm text-white/50">No CPU decision data yet.</div>
+              <div className="text-xs text-white/40">
+                {cpuStream.isAvailable
+                  ? "Opponent analysis will appear after their move."
+                  : "Live CPU stream unavailable. Final CPU decision will appear after their move."}
+              </div>
             )}
           </div>
         </div>
@@ -2093,6 +2438,22 @@ export function InteractiveBattle({
   const refetchBattleState = stateQuery.refetch;
 
   const liveBattleState = stateQuery.data ?? battleStateSnapshot;
+  const cpuStream = useCpuStream(liveBattleState?.battleId ?? null);
+
+  const playerNeedsToAct =
+    !!battleId &&
+    !!liveBattleState &&
+    !liveBattleState.isEnded &&
+    (liveBattleState.waitingForMove ||
+      liveBattleState.phase === "awaiting-forced-switch-p1");
+
+  const copilot = useCopilotHistory(
+    battleId,
+    liveBattleState?.currentTurn ?? 0,
+    liveBattleState?.phase,
+    playerNeedsToAct,
+  );
+
   const p1RecommendedMoves = p1MovesQuery.data?.recommendedMoves ?? [];
   const p2RecommendedMoves = p2MovesQuery.data?.recommendedMoves ?? [];
 
@@ -2582,6 +2943,7 @@ export function InteractiveBattle({
     return (
       <BattleArena
         battleState={liveBattleState}
+        cpuStream={cpuStream}
         visualHpPercents={visualHpPercents}
         isPlaybackRunning={isPlaybackRunning}
         isSubmittingMove={isSubmittingMove}
@@ -2595,6 +2957,8 @@ export function InteractiveBattle({
         collapsedTurns={collapsedTurns}
         playbackError={playbackError}
         playerName={playerName}
+        copilotHistory={copilot.history}
+        copilotLoading={copilot.isLoading}
         onToggleTurnCollapse={toggleTurnCollapse}
         onSubmitAction={({ choice, label, moveIndex }) => {
           if (isSubmittingMoveRef.current) return;

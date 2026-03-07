@@ -10,7 +10,7 @@ export default async function BattlePage({
 
   return (
     <div className="min-h-screen bg-black text-white">
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8">
         <div className="mb-4 flex justify-end">
           <UserButton afterSignOutUrl="/" />
         </div>
