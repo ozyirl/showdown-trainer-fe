@@ -2545,9 +2545,12 @@ export function InteractiveBattle({
       autoMoves: true,
     },
     level: 100,
-    formatid: "gen9customgame",
   });
   const [battleId, setBattleId] = useState<string | null>(initialBattleId);
+  const [activeBattleUi, setActiveBattleUi] =
+    useState<ActiveBattleUiState>(
+      () => readStoredBattleUiPrefs(initialBattleId) ?? DEFAULT_ACTIVE_BATTLE_UI,
+    );
   const [battleStateSnapshot, setBattleStateSnapshot] =
     useState<BattleState | null>(null);
   const [moveUiError, setMoveUiError] = useState<string | null>(null);
@@ -2694,6 +2697,9 @@ export function InteractiveBattle({
 
   const liveBattleState = stateQuery.data ?? battleStateSnapshot;
   const cpuStream = useCpuStream(liveBattleState?.battleId ?? null);
+  const copilotEnabled = battleId
+    ? activeBattleUi.copilotEnabled
+    : setup.copilotMode !== "off";
 
   const playerNeedsToAct =
     !!battleId &&
@@ -2706,7 +2712,7 @@ export function InteractiveBattle({
     battleId,
     liveBattleState?.currentTurn ?? 0,
     liveBattleState?.phase,
-    playerNeedsToAct,
+    playerNeedsToAct && copilotEnabled,
   );
 
   const selectedP1SavedTeam =
@@ -2793,6 +2799,13 @@ export function InteractiveBattle({
       return response.json() as Promise<BattleState>;
     },
     onSuccess: (state) => {
+      const nextBattleUi = {
+        copilotEnabled: setup.copilotMode !== "off",
+        copilotMode: setup.copilotMode,
+        cpuModelProfile: setup.cpuModelProfile,
+      } satisfies ActiveBattleUiState;
+      writeStoredBattleUiPrefs(state.battleId, nextBattleUi);
+      setActiveBattleUi(nextBattleUi);
       setBattleId(state.battleId);
       if (pathname !== `/battle/${state.battleId}`) {
         router.push(`/battle/${state.battleId}`);
@@ -3232,6 +3245,9 @@ export function InteractiveBattle({
         collapsedTurns={collapsedTurns}
         playbackError={playbackError}
         playerName={playerName}
+        copilotEnabled={copilotEnabled}
+        copilotMode={activeBattleUi.copilotMode}
+        cpuModelProfile={activeBattleUi.cpuModelProfile}
         copilotHistory={copilot.history}
         copilotLoading={copilot.isLoading}
         onToggleTurnCollapse={toggleTurnCollapse}
@@ -3270,6 +3286,7 @@ export function InteractiveBattle({
           setIsPlaybackRunning(false);
           setAnimatedStatusText(null);
           setIsSubmittingMove(false);
+          setActiveBattleUi(DEFAULT_ACTIVE_BATTLE_UI);
           isSubmittingMoveRef.current = false;
           isPlaybackBusyRef.current = false;
           lastContinueAtRef.current = 0;
