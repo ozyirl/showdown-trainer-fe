@@ -106,6 +106,7 @@ type BattleState = {
     source?: "model" | "fallback" | string;
     choice?: string;
     actionType?: string;
+    moveIndex?: number;
     moveName?: string;
     reasoning?: string;
     rawResponse?: unknown;
@@ -121,9 +122,25 @@ type CpuStreamDecisionSummary = {
   source: string;
   modelId: string;
   latencyMs: number;
+  moveIndex?: number;
+  moveName?: string;
   reasoning?: string;
   rawResponse?: string;
   error?: string;
+};
+
+type ParsedCpuDecision = {
+  moveIndex?: number;
+  moveName?: string;
+  choice?: string;
+  actionType?: string;
+  modelId?: string;
+  latencyMs?: number;
+  source?: string;
+  reasoning?: string;
+  error?: string;
+  rawResponse?: string;
+  cleanedText?: string | null;
 };
 
 type CpuStreamState = {
@@ -633,11 +650,32 @@ function useCpuStream(battleId: string | null): CpuStreamState {
     const handleDone = (event: MessageEvent<string>) => {
       const data = parseEvent<CpuStreamDecisionSummary>(event);
       if (!data) return;
-      setDecision(data);
-      setIsStreaming(false);
-      if (typeof data.rawResponse === "string" && data.rawResponse.length > 0) {
-        setBuffer(data.rawResponse);
-      }
+      void (async () => {
+        const parsed =
+          typeof data.rawResponse === "string" && data.rawResponse.length > 0
+            ? await parseCpuDecisionRawResponse(data.rawResponse)
+            : null;
+
+        setDecision({
+          ...data,
+          moveIndex: parsed?.moveIndex ?? data.moveIndex,
+          moveName: parsed?.moveName ?? data.moveName,
+          choice: parsed?.choice ?? data.choice,
+          actionType: parsed?.actionType ?? data.actionType,
+          source: parsed?.source ?? data.source,
+          modelId: parsed?.modelId ?? data.modelId,
+          latencyMs: parsed?.latencyMs ?? data.latencyMs,
+          reasoning: parsed?.reasoning ?? data.reasoning,
+          error: parsed?.error ?? data.error,
+          rawResponse: data.rawResponse,
+        });
+        setIsStreaming(false);
+        if (parsed?.cleanedText) {
+          setBuffer(parsed.cleanedText);
+          setVisibleLength(parsed.cleanedText.length);
+          return;
+        }
+      })();
     };
 
     const handleModelError = (event: MessageEvent<string>) => {
@@ -1153,39 +1191,265 @@ function hpPercentFromStatePokemon(pokemon: BattlePokemonState) {
   return hpPercent(pokemon.hp, pokemon.maxHp);
 }
 
-function parseCpuDecisionRawResponse(
-  raw?: string,
-): { moveIndex?: number; moveName?: string; reasoning?: string } | null {
+function normalizeCpuReasoningText(rawText?: string | null) {
+  if (!rawText) return null;
+
+  const lines = rawText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) =>
+      line
+        .replace(/^\s*(?:[-*•]\s*)?reasoning\s*:\s*/i, "")
+        .replace(/^\s*(?:[-*•]\s*)?analysis\s*:\s*/i, "")
+        .replace(/^\s*(?:[-*•]\s*)?thought\s*\d*\s*:\s*/i, "")
+        .trim(),
+    )
+    .filter((line) => !/^\{.*\}$/.test(line))
+    .filter((line) => !/^[{}[\],]+$/.test(line))
+    .filter((line) => !/^"[\w-]+"\s*:/.test(line))
+    .filter(Boolean);
+
+  const deduped: string[] = [];
+  for (const line of lines) {
+    if (deduped[deduped.length - 1] === line) continue;
+    deduped.push(line);
+  }
+
+  if (!deduped.length) return null;
+  if (deduped.length === 1) return deduped[0];
+  return deduped.map((line) => `• ${line}`).join("\n");
+}
+
+function extractLastJsonObject(text: string) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let end = -1;
+
+  for (let i = text.length - 1; i >= 0; i -= 1) {
+    const char = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (char === "}") {
+      if (end === -1) end = i;
+      depth += 1;
+      continue;
+    }
+
+    if (char === "{") {
+      depth -= 1;
+      if (depth === 0 && end !== -1) {
+        return {
+          start: i,
+          end: end + 1,
+          jsonText: text.slice(i, end + 1),
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function parseCpuDecisionRawResponseSync(raw?: string) {
   if (!raw || typeof raw !== "string") return null;
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const fencedMatches = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
+  const fenced = fencedMatches.at(-1);
+
+  if (fenced) {
+    try {
+      const parsed = JSON.parse(fenced[1].trim()) as Record<string, unknown>;
+      const visibleText = `${trimmed.slice(0, fenced.index)} ${trimmed.slice((fenced.index ?? 0) + fenced[0].length)}`;
+      return {
+        ...parsedCpuDecisionFromObject(parsed),
+        rawResponse: raw,
+        cleanedText: normalizeCpuReasoningText(visibleText) ?? extractReasoningFromObject(parsed),
+      } satisfies ParsedCpuDecision;
+    } catch {
+      // Ignore and continue to trailing object parsing.
+    }
+  }
+
+  const trailing = extractLastJsonObject(trimmed);
+  if (!trailing) {
     return {
-      moveIndex:
-        typeof parsed.moveIndex === "number"
-          ? parsed.moveIndex
-          : typeof parsed.choiceIndex === "number"
-            ? parsed.choiceIndex
-            : undefined,
-      moveName:
-        typeof parsed.moveName === "string"
-          ? parsed.moveName
-          : typeof parsed.move === "string"
-            ? parsed.move
-            : typeof parsed.choice === "string"
-              ? parsed.choice
-              : undefined,
-      reasoning:
-        typeof parsed.reasoning === "string"
-          ? parsed.reasoning
-          : typeof parsed.explanation === "string"
-            ? parsed.explanation
-            : typeof parsed.reason === "string"
-              ? parsed.reason
-              : undefined,
-    };
+      rawResponse: raw,
+      cleanedText: normalizeCpuReasoningText(trimmed),
+      reasoning: normalizeCpuReasoningText(trimmed) ?? undefined,
+    } satisfies ParsedCpuDecision;
+  }
+
+  try {
+    const parsed = JSON.parse(trailing.jsonText) as Record<string, unknown>;
+    const visibleText = `${trimmed.slice(0, trailing.start)} ${trimmed.slice(trailing.end)}`;
+    return {
+      ...parsedCpuDecisionFromObject(parsed),
+      rawResponse: raw,
+      cleanedText: normalizeCpuReasoningText(visibleText) ?? extractReasoningFromObject(parsed),
+    } satisfies ParsedCpuDecision;
   } catch {
+    const visibleText =
+      trailing.end === trimmed.length
+        ? `${trimmed.slice(0, trailing.start)} ${trimmed.slice(trailing.end)}`
+        : trimmed;
+    return {
+      rawResponse: raw,
+      cleanedText: normalizeCpuReasoningText(visibleText),
+      reasoning: normalizeCpuReasoningText(visibleText) ?? undefined,
+    } satisfies ParsedCpuDecision;
+  }
+}
+
+async function parsePossiblyMalformedJson(jsonText: string) {
+  try {
+    return JSON.parse(jsonText) as Record<string, unknown>;
+  } catch {
+    try {
+      const loadModule = new Function(
+        "moduleName",
+        "return import(moduleName)",
+      ) as (moduleName: string) => Promise<unknown>;
+      const mod = (await loadModule("jsonrepair")) as {
+        jsonrepair?: (value: string) => string;
+      };
+      if (typeof mod.jsonrepair === "function") {
+        return JSON.parse(mod.jsonrepair(jsonText)) as Record<string, unknown>;
+      }
+    } catch {
+      // Optional dependency; ignore when unavailable.
+    }
     return null;
   }
+}
+
+function extractReasoningFromObject(data: Record<string, unknown>) {
+  const candidates = [
+    data.reasoning,
+    data.explanation,
+    data.reason,
+    data.summary,
+    data.analysis,
+    (data.message as Record<string, unknown> | undefined)?.content,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return normalizeCpuReasoningText(candidate.trim());
+    }
+  }
+
+  return null;
+}
+
+function parsedCpuDecisionFromObject(data: Record<string, unknown>): ParsedCpuDecision {
+  return {
+    moveIndex:
+      typeof data.moveIndex === "number"
+        ? data.moveIndex
+        : typeof data.choiceIndex === "number"
+          ? data.choiceIndex
+          : undefined,
+    moveName:
+      typeof data.moveName === "string"
+        ? data.moveName
+        : typeof data.move === "string"
+          ? data.move
+          : undefined,
+    choice:
+      typeof data.choice === "string"
+        ? data.choice
+        : typeof data.action === "string"
+          ? data.action
+          : typeof data.move === "string"
+            ? data.move
+            : typeof data.moveName === "string"
+              ? data.moveName
+              : undefined,
+    actionType:
+      typeof data.actionType === "string"
+        ? data.actionType
+        : typeof data.type === "string"
+          ? data.type
+          : undefined,
+    modelId: typeof data.modelId === "string" ? data.modelId : undefined,
+    latencyMs: typeof data.latencyMs === "number" ? data.latencyMs : undefined,
+    source: typeof data.source === "string" ? data.source : undefined,
+    error: typeof data.error === "string" ? data.error : undefined,
+    reasoning: extractReasoningFromObject(data) ?? undefined,
+  };
+}
+
+async function parseCpuDecisionRawResponse(raw?: string) {
+  if (!raw || typeof raw !== "string") return null;
+
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const fencedMatches = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
+  const fenced = fencedMatches.at(-1);
+
+  let parsedObject: Record<string, unknown> | null = null;
+  let removedSegment: { start: number; end: number } | null = null;
+
+  if (fenced && typeof fenced.index === "number") {
+    removedSegment = {
+      start: fenced.index,
+      end: fenced.index + fenced[0].length,
+    };
+    parsedObject = await parsePossiblyMalformedJson(fenced[1].trim());
+  }
+
+  if (!parsedObject) {
+    const trailing = extractLastJsonObject(trimmed);
+    if (trailing) {
+      if (trailing.end === trimmed.length) {
+        removedSegment = { start: trailing.start, end: trailing.end };
+      }
+      parsedObject = await parsePossiblyMalformedJson(trailing.jsonText);
+      if (parsedObject) {
+        removedSegment = { start: trailing.start, end: trailing.end };
+      }
+    }
+  }
+
+  const visibleText = removedSegment
+    ? `${trimmed.slice(0, removedSegment.start)} ${trimmed.slice(removedSegment.end)}`
+    : trimmed;
+  const cleanedText = normalizeCpuReasoningText(visibleText);
+
+  if (!parsedObject) {
+    return {
+      rawResponse: raw,
+      cleanedText,
+      reasoning: cleanedText ?? undefined,
+    } satisfies ParsedCpuDecision;
+  }
+
+  return {
+    ...parsedCpuDecisionFromObject(parsedObject),
+    rawResponse: raw,
+    cleanedText: cleanedText ?? extractReasoningFromObject(parsedObject),
+  } satisfies ParsedCpuDecision;
 }
 
 function normalizeLastTurnEventsToLines(state: BattleState): string[] {
@@ -1262,29 +1526,26 @@ function normalizeLastTurnEventsToLines(state: BattleState): string[] {
 function extractCpuReasoningText(decision: BattleState["lastCpuDecision"]) {
   if (!decision) return null;
   if (typeof decision.reasoning === "string" && decision.reasoning.trim()) {
-    return decision.reasoning.trim();
+    return normalizeCpuReasoningText(decision.reasoning.trim());
   }
 
   const raw = decision.rawResponse;
   if (typeof raw === "string") {
-    const parsed = parseCpuDecisionRawResponse(raw);
-    if (parsed?.reasoning) return parsed.reasoning;
-    return raw.trim() || null;
+    const parsed = parseCpuDecisionRawResponseSync(raw);
+    const fallbackText =
+      parsed?.cleanedText ??
+      parsed?.reasoning ??
+      normalizeCpuReasoningText(raw.trim()) ??
+      raw.trim();
+    return (
+      fallbackText ||
+      null
+    );
   }
   if (raw && typeof raw === "object") {
     const data = raw as Record<string, unknown>;
-    const candidates = [
-      data.reasoning,
-      data.explanation,
-      data.reason,
-      data.summary,
-      (data.message as Record<string, unknown> | undefined)?.content,
-    ];
-    for (const candidate of candidates) {
-      if (typeof candidate === "string" && candidate.trim()) {
-        return candidate.trim();
-      }
-    }
+    const extracted = extractReasoningFromObject(data);
+    if (extracted) return extracted;
     try {
       return JSON.stringify(raw);
     } catch {
@@ -1292,6 +1553,16 @@ function extractCpuReasoningText(decision: BattleState["lastCpuDecision"]) {
     }
   }
   return null;
+}
+
+function formatCpuRawOutput(raw: unknown) {
+  if (typeof raw === "string") return raw.trim() || null;
+  if (!raw) return null;
+  try {
+    return JSON.stringify(raw, null, 2);
+  } catch {
+    return String(raw);
+  }
 }
 
 function isNarrationLineRelevant(line: string) {
@@ -2004,12 +2275,29 @@ function BattleArena(params: {
     onLeaveBattle,
   } = params;
   const [teamOrder, setTeamOrder] = useState("123456");
+  const [cpuThinkingIndex, setCpuThinkingIndex] = useState(0);
+  const [cpuReasoningExpanded, setCpuReasoningExpanded] = useState(false);
   const loggerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!loggerRef.current) return;
     loggerRef.current.scrollTop = loggerRef.current.scrollHeight;
   }, [turnLogGroups]);
+
+  useEffect(() => {
+    if (!cpuStream.isStreaming) {
+      setCpuThinkingIndex(0);
+      return;
+    }
+    const interval = window.setInterval(() => {
+      setCpuThinkingIndex((current) => (current + 1) % CPU_THINKING_LABELS.length);
+    }, 1500);
+    return () => window.clearInterval(interval);
+  }, [cpuStream.isStreaming]);
+
+  useEffect(() => {
+    setCpuReasoningExpanded(false);
+  }, [cpuStream.decision?.turn, battleState.lastCpuDecision?.turn]);
 
   const playerCanAct =
     canPlayerAct(battleState, moveSubmitPending || isSubmittingMove) &&
@@ -2028,6 +2316,18 @@ function BattleArena(params: {
   const cpuReasoning = extractCpuReasoningText(battleState.lastCpuDecision);
   const streamedCpuText = cpuStream.text.trim();
   const cpuDecisionSummary = cpuStream.decision ?? battleState.lastCpuDecision;
+  const rawCpuOutput = formatCpuRawOutput(
+    cpuStream.decision?.rawResponse ?? battleState.lastCpuDecision?.rawResponse,
+  );
+  const finalCpuReasoning = cpuStream.isStreaming
+    ? null
+    : streamedCpuText || cpuReasoning || cpuStream.error;
+  const hasStructuredCpuSummary = Boolean(
+    cpuDecisionSummary?.choice ||
+      cpuDecisionSummary?.moveName ||
+      cpuDecisionSummary?.moveIndex ||
+      cpuDecisionSummary?.actionType,
+  );
 
   return (
     <div className="space-y-4">
@@ -2465,44 +2765,112 @@ function BattleArena(params: {
           </div>
           </div>
 
-          <div className={`${panelClass} shrink-0 space-y-3`}>
+          <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
             <div className="text-sm font-medium text-white/70">CPU Analysis</div>
-            {cpuStream.isStreaming || streamedCpuText || cpuDecisionSummary ? (
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2 text-xs text-white/55">
-                  <div>Source: {cpuDecisionSummary?.source ?? "streaming"}</div>
-                  <div>
-                    {cpuStream.isStreaming
-                      ? "Thinking..."
-                      : typeof cpuDecisionSummary?.latencyMs === "number"
-                        ? `${cpuDecisionSummary.latencyMs}ms`
-                        : ""}
-                  </div>
-                  <div className="col-span-2 truncate">
-                    Chose: {cpuDecisionSummary?.choice ?? "pending"}
-                  </div>
-                  <div className="col-span-2">
-                    Type: {cpuDecisionSummary?.actionType ?? "unknown"}
-                  </div>
-                </div>
-                {(streamedCpuText || cpuReasoning || cpuStream.error) && (
-                  <div className="rounded-lg border border-white/10 bg-black/40 p-3 text-xs text-white/70">
-                    <div className="whitespace-pre-wrap">
-                      {streamedCpuText || cpuReasoning || cpuStream.error}
-                      {cpuStream.isStreaming ? (
-                        <span className="ml-1 inline-block h-3 w-1 animate-pulse bg-white/60 align-middle" />
-                      ) : null}
+            <div className="mt-3 flex-1 overflow-y-auto rounded-xl border border-white/10 bg-black/40 p-3">
+              {cpuStream.isStreaming ? (
+                <div className="space-y-3">
+                  <div className="rounded-xl border border-blue-400/15 bg-blue-400/5 p-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-blue-300/70">
+                      Thinking
+                    </div>
+                    <div className="mt-2 flex items-center gap-2 text-sm text-white/85">
+                      <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-300" />
+                      {CPU_THINKING_LABELS[cpuThinkingIndex]}
+                    </div>
+                    <div className="mt-3 space-y-2 text-xs text-white/45">
+                      <div>Preparing a structured recommendation.</div>
+                      <div>Raw streamed tokens are hidden until parsing finishes.</div>
                     </div>
                   </div>
-                )}
-              </div>
-            ) : (
-              <div className="text-xs text-white/40">
-                {cpuStream.isAvailable
-                  ? "Opponent analysis will appear after their move."
-                  : "Live CPU stream unavailable. Final CPU decision will appear after their move."}
-              </div>
-            )}
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">
+                        Source
+                      </div>
+                      <div className="mt-1 text-xs text-white/80">model</div>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">
+                        Status
+                      </div>
+                      <div className="mt-1 text-xs text-white/80">Streaming</div>
+                    </div>
+                  </div>
+                </div>
+              ) : cpuDecisionSummary || finalCpuReasoning ? (
+                <div className="space-y-3">
+                  <div className="rounded-xl border border-emerald-400/15 bg-emerald-400/5 p-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-300/70">
+                      Analysis complete
+                    </div>
+                    <div className="mt-2 text-sm text-white/80">
+                      {hasStructuredCpuSummary
+                        ? "Recommendation parsed. Reasoning below is the source of truth."
+                        : "Structured recommendation unavailable. Showing cleaned reasoning."}
+                    </div>
+                  </div>
+
+                  {!hasStructuredCpuSummary && (
+                    <div className="rounded-lg border border-amber-400/15 bg-amber-400/5 px-3 py-2 text-xs text-amber-200/85">
+                      Could not parse structured recommendation cleanly.
+                    </div>
+                  )}
+
+                  {finalCpuReasoning && (
+                    <div className="rounded-lg border border-white/10 bg-black/50 p-3">
+                      <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">
+                        Reasoning
+                      </div>
+                      <div
+                        className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-white/75"
+                        style={
+                          cpuReasoningExpanded
+                            ? undefined
+                            : {
+                                display: "-webkit-box",
+                                WebkitLineClamp: 4,
+                                WebkitBoxOrient: "vertical",
+                                overflow: "hidden",
+                              }
+                        }
+                      >
+                        {finalCpuReasoning}
+                      </div>
+                      {finalCpuReasoning.length > 220 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCpuReasoningExpanded((current) => !current)
+                          }
+                          className="mt-2 text-[11px] text-white/55 hover:text-white/80"
+                        >
+                          {cpuReasoningExpanded ? "Show less" : "Show more"}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {rawCpuOutput && (
+                    <details className="rounded-lg border border-white/10 bg-black/35">
+                      <summary className="cursor-pointer px-3 py-2 text-[11px] uppercase tracking-[0.16em] text-white/45">
+                        Raw model output
+                      </summary>
+                      <div className="max-h-48 overflow-y-auto border-t border-white/10 px-3 py-2 font-mono text-[11px] leading-relaxed text-white/55">
+                        <pre className="whitespace-pre-wrap">{rawCpuOutput}</pre>
+                      </div>
+                    </details>
+                  )}
+                </div>
+              ) : (
+                <div className="text-xs text-white/40">
+                  {cpuStream.isAvailable
+                    ? "Opponent analysis will appear after their move."
+                    : "Live CPU stream unavailable. Final CPU decision will appear after their move."}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
