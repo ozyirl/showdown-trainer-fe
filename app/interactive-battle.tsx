@@ -1,9 +1,11 @@
 "use client";
 
-import { useUser } from "@clerk/nextjs";
+import { useAuth, useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createTeambuilderApiClient } from "@/lib/teambuilder/api-client";
+import type { Team } from "@/lib/teambuilder/types";
 
 const API_URL = "http://localhost:5200/api";
 const SEARCH_DEBOUNCE_MS = 300;
@@ -155,6 +157,7 @@ type CopilotGuidance = {
   aggressiveAlternative: CopilotAlternative | null;
   mainRisk: string;
   winConditionNote: string;
+  disabled?: true;
 };
 
 type PlaybackEvent = {
@@ -215,15 +218,228 @@ type SideSetup = {
   autoMoves: boolean;
 };
 
+type TeamSourceMode = "random" | "saved" | "manual";
+type CopilotMode = "off" | "coach" | "deep";
+type CpuModelProfile = "fast" | "reasoning";
+type GenerationKey =
+  | "gen1"
+  | "gen2"
+  | "gen3"
+  | "gen4"
+  | "gen5"
+  | "gen6"
+  | "gen7"
+  | "gen8"
+  | "gen9";
+
 type BattleSetupState = {
-  randomTeams: boolean;
-  randomTeamFormatid: string;
+  teamSource: TeamSourceMode;
+  generation: GenerationKey;
+  randomBattleType: string;
+  standardBattleType: string;
+  copilotMode: CopilotMode;
+  cpuModelProfile: CpuModelProfile;
+  p1SavedTeamId: string;
+  p2SavedTeamId: string;
   randomSeedInput: string;
   p1: SideSetup;
   p2: SideSetup;
   level: number;
-  formatid: string;
 };
+
+type ActiveBattleUiState = {
+  copilotEnabled: boolean;
+  copilotMode: CopilotMode;
+  cpuModelProfile: CpuModelProfile;
+};
+
+const DEFAULT_ACTIVE_BATTLE_UI: ActiveBattleUiState = {
+  copilotEnabled: false,
+  copilotMode: "off",
+  cpuModelProfile: "fast",
+};
+
+type FormatOption = {
+  value: string;
+  label: string;
+  description: string;
+};
+
+const GENERATION_OPTIONS: Array<{ value: GenerationKey; label: string }> = [
+  { value: "gen1", label: "Gen 1" },
+  { value: "gen2", label: "Gen 2" },
+  { value: "gen3", label: "Gen 3" },
+  { value: "gen4", label: "Gen 4" },
+  { value: "gen5", label: "Gen 5" },
+  { value: "gen6", label: "Gen 6" },
+  { value: "gen7", label: "Gen 7" },
+  { value: "gen8", label: "Gen 8" },
+  { value: "gen9", label: "Gen 9" },
+];
+
+const RANDOM_BATTLE_OPTIONS: FormatOption[] = [
+  {
+    value: "randombattle",
+    label: "Random Battle",
+    description: "Standard Showdown random teams.",
+  },
+  {
+    value: "unratedrandombattle",
+    label: "Unrated Random",
+    description: "Random teams without a ranked ladder format.",
+  },
+  {
+    value: "freeforallrandombattle",
+    label: "Free-for-All Random",
+    description: "Free-for-all rules with generated teams.",
+  },
+  {
+    value: "randombattleblitz",
+    label: "Random Battle Blitz",
+    description: "Random teams with a faster battle clock.",
+  },
+];
+
+const STANDARD_BATTLE_OPTIONS: FormatOption[] = [
+  { value: "ou", label: "OU", description: "Standard overused singles." },
+  { value: "ubers", label: "Ubers", description: "High-power restricted format." },
+  { value: "uu", label: "UU", description: "Underused singles." },
+  { value: "ru", label: "RU", description: "Rarely used singles." },
+  { value: "nu", label: "NU", description: "Never used singles." },
+  { value: "pu", label: "PU", description: "Lower-tier singles." },
+  { value: "lc", label: "LC", description: "Little Cup." },
+  { value: "monotype", label: "Monotype", description: "Single-type team constraint." },
+  { value: "cap", label: "CAP", description: "Create-A-Pokemon ruleset." },
+  {
+    value: "customgame",
+    label: "Custom Game",
+    description: "Flexible rules for testing and sandbox battles.",
+  },
+];
+
+const COPILOT_MODE_OPTIONS: Array<{
+  value: CopilotMode;
+  label: string;
+  description: string;
+}> = [
+  { value: "off", label: "Off", description: "Hide battle coach analysis." },
+  {
+    value: "coach",
+    label: "Coach",
+    description: "Show actionable turn-by-turn guidance.",
+  },
+  {
+    value: "deep",
+    label: "Deep Coach",
+    description: "Show guidance and CPU reasoning context together.",
+  },
+];
+
+const CPU_MODEL_OPTIONS: Array<{
+  value: CpuModelProfile;
+  label: string;
+  description: string;
+}> = [
+  { value: "fast", label: "Fast model", description: "Lower-latency CPU turns." },
+  {
+    value: "reasoning",
+    label: "Reasoning model",
+    description: "Slower but more deliberate CPU decisions.",
+  },
+];
+
+const CPU_THINKING_LABELS = [
+  "Analyzing matchup...",
+  "Evaluating legal moves...",
+  "Checking type matchups...",
+  "Estimating strongest legal move...",
+  "Considering safe alternatives...",
+];
+
+function buildFormatId(generation: GenerationKey, format: string) {
+  return `${generation}${format}`;
+}
+
+function resolveBattleFormats(setup: BattleSetupState) {
+  if (setup.teamSource === "random") {
+    return {
+      formatid: buildFormatId(setup.generation, setup.randomBattleType),
+      randomTeamFormatid: buildFormatId(setup.generation, setup.randomBattleType),
+    };
+  }
+
+  return {
+    formatid: buildFormatId(setup.generation, setup.standardBattleType),
+    randomTeamFormatid: buildFormatId(setup.generation, "randombattle"),
+  };
+}
+
+function battleUiPrefsStorageKey(battleId: string) {
+  return `battle-ui-prefs-${battleId}`;
+}
+
+function readStoredBattleUiPrefs(
+  battleId: string | null | undefined,
+): ActiveBattleUiState | null {
+  if (!battleId || typeof window === "undefined") return null;
+
+  try {
+    const raw = window.sessionStorage.getItem(battleUiPrefsStorageKey(battleId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<ActiveBattleUiState>;
+    if (
+      typeof parsed.copilotEnabled !== "boolean" ||
+      (parsed.copilotMode !== "off" &&
+        parsed.copilotMode !== "coach" &&
+        parsed.copilotMode !== "deep") ||
+      (parsed.cpuModelProfile !== "fast" &&
+        parsed.cpuModelProfile !== "reasoning")
+    ) {
+      return null;
+    }
+    return {
+      copilotEnabled: parsed.copilotEnabled,
+      copilotMode: parsed.copilotMode,
+      cpuModelProfile: parsed.cpuModelProfile,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredBattleUiPrefs(
+  battleId: string,
+  prefs: ActiveBattleUiState,
+) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(
+      battleUiPrefsStorageKey(battleId),
+      JSON.stringify(prefs),
+    );
+  } catch {
+    // Ignore sessionStorage failures and keep runtime behavior functional.
+  }
+}
+
+function teamToBattleRoster(team: Team | null | undefined, level: number) {
+  if (!team) return [];
+
+  return team.slots
+    .filter((slot) => slot.species.trim())
+    .slice(0, 6)
+    .map((slot) => ({
+      species: slot.species.trim(),
+      nickname: slot.nickname?.trim() || undefined,
+      item: slot.item.trim() || undefined,
+      ability: slot.ability.trim() || undefined,
+      moves: slot.moves.map((move) => move.trim()).filter(Boolean).slice(0, 4),
+      nature: slot.nature.trim() || undefined,
+      evs: slot.evs,
+      ivs: slot.ivs,
+      level,
+    }));
+}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -504,6 +720,7 @@ function useCopilotHistory(
       .then((guidance) => {
         if (cancelled) return;
         fetchedKeysRef.current.add(requestKey);
+        if (guidance.disabled) return;
         setHistory((prev) => [
           ...prev,
           { turn: currentTurn, phase: phase ?? "unknown", guidance },
@@ -1744,6 +1961,9 @@ function BattleArena(params: {
   collapsedTurns: Record<number, boolean>;
   playbackError: string | null;
   playerName: string;
+  copilotEnabled: boolean;
+  copilotMode: CopilotMode;
+  cpuModelProfile: CpuModelProfile;
   copilotHistory: CopilotHistoryEntry[];
   copilotLoading: boolean;
   onToggleTurnCollapse: (turn: number) => void;
@@ -1772,6 +1992,9 @@ function BattleArena(params: {
     collapsedTurns,
     playbackError,
     playerName,
+    copilotEnabled,
+    copilotMode,
+    cpuModelProfile,
     copilotHistory,
     copilotLoading,
     onToggleTurnCollapse,
@@ -1834,30 +2057,44 @@ function BattleArena(params: {
         </div>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)_300px] xl:grid-cols-[340px_minmax(0,1fr)_340px]">
-        <div className="flex h-[72vh] flex-col">
-          <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
-            <div className="mb-3 flex items-center gap-2">
-              <h3 className="text-sm font-medium tracking-wide text-white/70">
-                Battle Coach
-              </h3>
-              {copilotLoading && (
-                <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/20 border-t-blue-400" />
-              )}
-            </div>
-            <div className="flex-1 space-y-3 overflow-y-auto rounded-xl border border-white/10 bg-black/50 p-3">
-              {copilotHistory.length === 0 && !copilotLoading && (
-                <div className="text-xs text-white/40">
-                  Coach analysis will appear when it&apos;s your turn.
+      <div
+        className={
+          copilotEnabled
+            ? "grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)_300px] xl:grid-cols-[340px_minmax(0,1fr)_340px]"
+            : "grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_340px]"
+        }
+      >
+        {copilotEnabled && (
+          <div className="flex h-[72vh] flex-col">
+            <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h3 className="text-sm font-medium tracking-wide text-white/70">
+                  Battle Coach
+                </h3>
+                <div className="text-[10px] uppercase tracking-[0.16em] text-white/35">
+                  {copilotMode === "deep" ? "Deep Coach" : "Coach"}
                 </div>
-              )}
-              {copilotHistory.map((entry, i) => (
-                <CopilotMessageCard key={`copilot-${i}`} entry={entry} />
-              ))}
-              {copilotLoading && <CopilotLoadingCard />}
+              </div>
+              <div className="mb-3 flex items-center gap-2 text-[11px] text-white/45">
+                <span>CPU profile: {cpuModelProfile}</span>
+                {copilotLoading && (
+                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/20 border-t-blue-400" />
+                )}
+              </div>
+              <div className="flex-1 space-y-3 overflow-y-auto rounded-xl border border-white/10 bg-black/50 p-3">
+                {copilotHistory.length === 0 && !copilotLoading && (
+                  <div className="text-xs text-white/40">
+                    Coach analysis will appear when it&apos;s your turn.
+                  </div>
+                )}
+                {copilotHistory.map((entry, i) => (
+                  <CopilotMessageCard key={`copilot-${i}`} entry={entry} />
+                ))}
+                {copilotLoading && <CopilotLoadingCard />}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         <div className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
@@ -2161,7 +2398,7 @@ function BattleArena(params: {
 
       </div>
 
-        <div className="flex h-[72vh] flex-col gap-4">
+        <div className="flex h-[72vh] min-h-0 flex-col gap-4">
           <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-medium tracking-wide text-white/70">
@@ -2278,11 +2515,22 @@ export function InteractiveBattle({
 }: InteractiveBattleProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const { getToken, isLoaded, userId } = useAuth();
   const { user } = useUser();
   const playerName = user?.firstName ?? user?.username ?? "You";
+  const teambuilderApi = useMemo(
+    () => createTeambuilderApiClient(() => getToken()),
+    [getToken],
+  );
   const [setup, setSetup] = useState<BattleSetupState>({
-    randomTeams: true,
-    randomTeamFormatid: "gen9randombattle",
+    teamSource: "random",
+    generation: "gen9",
+    randomBattleType: "randombattle",
+    standardBattleType: "ou",
+    copilotMode: "coach",
+    cpuModelProfile: "fast",
+    p1SavedTeamId: "",
+    p2SavedTeamId: "",
     randomSeedInput: "",
     p1: {
       query: "",
@@ -2337,6 +2585,13 @@ export function InteractiveBattle({
     setup.p2.query.trim(),
     SEARCH_DEBOUNCE_MS,
   );
+
+  const teamsQuery = useQuery({
+    queryKey: ["battle", "teams"],
+    queryFn: () => teambuilderApi.getTeams(),
+    enabled: isLoaded && !!userId,
+    refetchOnWindowFocus: false,
+  });
 
   const p1SearchQuery = useQuery({
     queryKey: ["pokemon-search", "p1", p1SearchDebounced],
@@ -2454,6 +2709,12 @@ export function InteractiveBattle({
     playerNeedsToAct,
   );
 
+  const selectedP1SavedTeam =
+    teamsQuery.data?.find((team) => team.id === setup.p1SavedTeamId) ?? null;
+  const selectedP2SavedTeam =
+    teamsQuery.data?.find((team) => team.id === setup.p2SavedTeamId) ?? null;
+  const resolvedFormats = resolveBattleFormats(setup);
+
   const p1RecommendedMoves = p1MovesQuery.data?.recommendedMoves ?? [];
   const p2RecommendedMoves = p2MovesQuery.data?.recommendedMoves ?? [];
 
@@ -2479,35 +2740,43 @@ export function InteractiveBattle({
         .filter((num) => Number.isFinite(num));
       const randomSeed =
         parsedSeed.length >= 4 ? parsedSeed.slice(0, 4) : undefined;
+      const usingRandomTeams = setup.teamSource === "random";
 
       const body = {
-        randomTeams: setup.randomTeams,
-        randomTeamFormatid: setup.randomTeamFormatid || "gen9randombattle",
+        randomTeams: usingRandomTeams,
+        randomTeamFormatid: resolvedFormats.randomTeamFormatid,
         randomSeed,
-        p1Team: setup.randomTeams
+        copilotEnabled: setup.copilotMode !== "off",
+        copilotMode: setup.copilotMode,
+        cpuModelProfile: setup.cpuModelProfile,
+        p1Team: usingRandomTeams
           ? []
-          : setup.p1.selectedPokemon
-            ? [
-                {
-                  species: setup.p1.selectedPokemon.name,
-                  ...(p1ResolvedAutoMoves ? {} : { moves: p1ResolvedSelectedMoves }),
-                  level: setup.level,
-                },
-              ]
-            : [],
-        p2Team: setup.randomTeams
+          : setup.teamSource === "saved"
+            ? teamToBattleRoster(selectedP1SavedTeam, setup.level)
+            : setup.p1.selectedPokemon
+              ? [
+                  {
+                    species: setup.p1.selectedPokemon.name,
+                    ...(p1ResolvedAutoMoves ? {} : { moves: p1ResolvedSelectedMoves }),
+                    level: setup.level,
+                  },
+                ]
+              : [],
+        p2Team: usingRandomTeams
           ? []
-          : setup.p2.selectedPokemon
-            ? [
-                {
-                  species: setup.p2.selectedPokemon.name,
-                  ...(p2ResolvedAutoMoves ? {} : { moves: p2ResolvedSelectedMoves }),
-                  level: setup.level,
-                },
-              ]
-            : [],
+          : setup.teamSource === "saved"
+            ? teamToBattleRoster(selectedP2SavedTeam, setup.level)
+            : setup.p2.selectedPokemon
+              ? [
+                  {
+                    species: setup.p2.selectedPokemon.name,
+                    ...(p2ResolvedAutoMoves ? {} : { moves: p2ResolvedSelectedMoves }),
+                    level: setup.level,
+                  },
+                ]
+              : [],
         level: setup.level,
-        formatid: setup.formatid,
+        formatid: resolvedFormats.formatid,
       };
 
       const response = await fetch(`${API_URL}/battle/start`, {
@@ -2724,9 +2993,15 @@ export function InteractiveBattle({
     setCollapsedTurns((prev) => ({ ...prev, [turn]: !prev[turn] }));
   };
 
-  const setupReady = setup.randomTeams
-    ? true
-    : !!setup.p1.selectedPokemon && !!setup.p2.selectedPokemon;
+  const setupReady =
+    setup.teamSource === "random"
+      ? true
+      : setup.teamSource === "saved"
+        ? !!selectedP1SavedTeam &&
+          !!selectedP2SavedTeam &&
+          teamToBattleRoster(selectedP1SavedTeam, setup.level).length > 0 &&
+          teamToBattleRoster(selectedP2SavedTeam, setup.level).length > 0
+        : !!setup.p1.selectedPokemon && !!setup.p2.selectedPokemon;
 
   useEffect(() => {
     playbackEventsRef.current = playbackEvents;
@@ -3007,52 +3282,188 @@ export function InteractiveBattle({
   return (
     <div className="space-y-6">
       <div className={panelClass}>
-        <div className="mb-3 text-xs tracking-[0.18em] text-white/40">FORMAT</div>
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/80">
-            <input
-              type="checkbox"
-              checked={setup.randomTeams}
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <div className="text-xs tracking-[0.18em] text-white/40">FORMAT</div>
+            <div className="mt-2 text-sm text-white/55">
+              Quick-start defaults let you launch a battle immediately.
+            </div>
+          </div>
+          <div className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-white/55">
+            Ready in 1 click
+          </div>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <label className="space-y-1.5">
+            <span className="text-xs text-white/50">Team source</span>
+            <select
+              value={setup.teamSource}
               onChange={(e) =>
                 setSetup((prev) => ({
                   ...prev,
-                  randomTeams: e.target.checked,
+                  teamSource: e.target.value as TeamSourceMode,
                 }))
               }
-              className="size-4 accent-white"
-            />
-            Random teams
+              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
+            >
+              <option value="random">Showdown random teams</option>
+              <option value="saved">Use saved teams</option>
+              <option value="manual">Manual single Pokémon</option>
+            </select>
+            <div className="text-xs text-white/45">
+              {setup.teamSource === "random"
+                ? "Backend will generate Showdown random teams for the selected generation."
+                : setup.teamSource === "saved"
+                  ? "Choose saved teams from the teambuilder for both sides."
+                  : "Pick one Pokémon per side for a fast manual test battle."}
+            </div>
+          </label>
+
+          <label className="space-y-1.5">
+            <span className="text-xs text-white/50">Generation</span>
+            <select
+              value={setup.generation}
+              onChange={(e) =>
+                setSetup((prev) => ({
+                  ...prev,
+                  generation: e.target.value as GenerationKey,
+                }))
+              }
+              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
+            >
+              {GENERATION_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
         </div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-3">
-          <label className="space-y-1">
-            <span className="text-xs text-white/50">Battle format</span>
-            <input
-              value={setup.formatid}
-              onChange={(e) =>
-                setSetup((prev) => ({ ...prev, formatid: e.target.value }))
-              }
-              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
-              placeholder="gen9customgame"
-            />
-          </label>
-          <label className="space-y-1">
-            <span className="text-xs text-white/50">Random team format</span>
-            <input
-              value={setup.randomTeamFormatid}
+
+        <div className="mt-4 rounded-xl border border-white/10 bg-black/25 p-4">
+          <div className="mb-3">
+            <div className="text-xs tracking-[0.16em] text-white/40">BATTLE TYPE</div>
+            <div className="mt-1 text-xs text-white/45">
+              {setup.teamSource === "random"
+                ? "Choose the random ladder format to generate teams from."
+                : "Choose the ruleset used when saved or manual teams are selected."}
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="space-y-1.5 sm:col-span-3">
+              <span className="text-xs text-white/50">
+                {setup.teamSource === "random" ? "Random battle type" : "Battle type"}
+              </span>
+              <select
+                value={
+                  setup.teamSource === "random"
+                    ? setup.randomBattleType
+                    : setup.standardBattleType
+                }
+                onChange={(e) =>
+                  setSetup((prev) => ({
+                    ...prev,
+                    ...(prev.teamSource === "random"
+                      ? { randomBattleType: e.target.value }
+                      : { standardBattleType: e.target.value }),
+                  }))
+                }
+                className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
+              >
+                {(setup.teamSource === "random"
+                  ? RANDOM_BATTLE_OPTIONS
+                  : STANDARD_BATTLE_OPTIONS
+                ).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-1.5">
+              <span className="text-xs text-white/50">Battle format ID</span>
+              <div className="rounded-lg border border-white/10 bg-black/35 px-3 py-2 font-mono text-sm text-white/85">
+                {resolvedFormats.formatid}
+              </div>
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-xs text-white/50">Random team format ID</span>
+              <div className="rounded-lg border border-white/10 bg-black/35 px-3 py-2 font-mono text-sm text-white/85">
+                {resolvedFormats.randomTeamFormatid}
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div className={panelClass}>
+        <div className="mb-4">
+          <div className="text-xs tracking-[0.18em] text-white/40">AI SETTINGS</div>
+          <div className="mt-2 text-sm text-white/55">
+            Coach and CPU defaults are configured for immediate play.
+          </div>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="space-y-1.5">
+            <span className="text-xs text-white/50">Co-pilot mode</span>
+            <select
+              value={setup.copilotMode}
               onChange={(e) =>
                 setSetup((prev) => ({
                   ...prev,
-                  randomTeamFormatid: e.target.value,
+                  copilotMode: e.target.value as CopilotMode,
                 }))
               }
-              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20 disabled:opacity-50"
-              placeholder="gen9randombattle"
-              disabled={!setup.randomTeams}
-            />
+              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
+            >
+              {COPILOT_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
-          <label className="space-y-1">
-            <span className="text-xs text-white/50">Random seed (optional)</span>
+          <label className="space-y-1.5">
+            <span className="text-xs text-white/50">CPU model</span>
+            <select
+              value={setup.cpuModelProfile}
+              onChange={(e) =>
+                setSetup((prev) => ({
+                  ...prev,
+                  cpuModelProfile: e.target.value as CpuModelProfile,
+                }))
+              }
+              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
+            >
+              {CPU_MODEL_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <details className={panelClass}>
+        <summary className="cursor-pointer list-none">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs tracking-[0.18em] text-white/40">
+                ADVANCED (OPTIONAL)
+              </div>
+              <div className="mt-2 text-sm text-white/55">
+                Optional controls for reproducible battles and debugging.
+              </div>
+            </div>
+            <div className="text-xs text-white/45">Expand</div>
+          </div>
+        </summary>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="space-y-1.5">
+            <span className="text-xs text-white/50">Random seed</span>
             <input
               value={setup.randomSeedInput}
               onChange={(e) =>
@@ -3063,18 +3474,80 @@ export function InteractiveBattle({
               }
               className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20 disabled:opacity-50"
               placeholder="1,2,3,4"
-              disabled={!setup.randomTeams}
+              disabled={setup.teamSource !== "random"}
             />
+            <div className="text-xs text-white/45">
+              Optional seed for deterministic battles (useful for debugging or reproducing matches).
+            </div>
           </label>
         </div>
-        <div className="mt-3 text-xs text-white/50">
-          {setup.randomTeams
-            ? "Backend will generate true Showdown random teams."
-            : "Pick player and CPU Pokémon (and optional moves)."}
-        </div>
-      </div>
+      </details>
 
-      {!setup.randomTeams && (
+      {setup.teamSource === "saved" && (
+        <div className={panelClass}>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium tracking-wide text-white/70">
+                Saved Teams
+              </div>
+              <div className="mt-1 text-xs text-white/45">
+                Pulls from the existing teambuilder team list.
+              </div>
+            </div>
+            {teamsQuery.isFetching && (
+              <div className="text-xs text-white/45">Loading teams…</div>
+            )}
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <label className="space-y-1">
+              <span className="text-xs text-white/50">{playerName} team</span>
+              <select
+                value={setup.p1SavedTeamId}
+                onChange={(e) =>
+                  setSetup((prev) => ({ ...prev, p1SavedTeamId: e.target.value }))
+                }
+                className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
+                disabled={!teamsQuery.data?.length}
+              >
+                <option value="">Select a saved team</option>
+                {(teamsQuery.data ?? []).map((team) => (
+                  <option key={team.id} value={team.id}>
+                    {team.name} · {team.format}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-xs text-white/50">CPU team</span>
+              <select
+                value={setup.p2SavedTeamId}
+                onChange={(e) =>
+                  setSetup((prev) => ({ ...prev, p2SavedTeamId: e.target.value }))
+                }
+                className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
+                disabled={!teamsQuery.data?.length}
+              >
+                <option value="">Select a saved team</option>
+                {(teamsQuery.data ?? []).map((team) => (
+                  <option key={team.id} value={team.id}>
+                    {team.name} · {team.format}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {(teamsQuery.error || (!teamsQuery.isFetching && !teamsQuery.data?.length)) && (
+            <div className="mt-3 text-xs text-white/45">
+              {teamsQuery.error
+                ? (teamsQuery.error as Error).message
+                : "No saved teams found. Build one in /teambuilder first."}
+            </div>
+          )}
+        </div>
+      )}
+
+      {setup.teamSource === "manual" && (
         <div className="grid gap-6 lg:grid-cols-2">
           <PokemonSetupPanel
             side="p1"
@@ -3165,15 +3638,29 @@ export function InteractiveBattle({
           ].map(({ label, data }) => (
             <div
               key={label}
-              className="rounded-xl border border-white/10 bg-black/40 p-4"
+              className="rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.06] to-black/40 p-5"
             >
-              <div className="text-xs tracking-wide text-white/45">{label}</div>
-              <div className="mt-1 text-sm font-medium text-white">
-                {setup.randomTeams
-                  ? "Auto-generated team"
-                  : data.selectedPokemon?.name ?? "Not selected"}
+              <div className="text-xs tracking-[0.16em] text-white/45">{label} Team</div>
+              <div className="mt-2 text-base font-medium text-white">
+                {setup.teamSource === "random"
+                  ? "Auto-generated random team"
+                  : setup.teamSource === "saved"
+                    ? (label === "P1" ? selectedP1SavedTeam?.name : selectedP2SavedTeam?.name) ??
+                      "Not selected"
+                    : data.selectedPokemon?.name ?? "Not selected"}
               </div>
-              {!setup.randomTeams && data.selectedPokemon && (
+              {setup.teamSource === "saved" && (
+                <div className="mt-1 text-xs text-white/50">
+                  {label === "P1"
+                    ? selectedP1SavedTeam
+                      ? `${teamToBattleRoster(selectedP1SavedTeam, setup.level).length} Pokémon ready`
+                      : "No saved team selected"
+                    : selectedP2SavedTeam
+                      ? `${teamToBattleRoster(selectedP2SavedTeam, setup.level).length} Pokémon ready`
+                      : "No saved team selected"}
+                </div>
+              )}
+              {setup.teamSource === "manual" && data.selectedPokemon && (
                 <div className="mt-1 text-xs text-white/50">
                   {data.autoMoves
                     ? "Moves: auto-select"
@@ -3197,13 +3684,17 @@ export function InteractiveBattle({
             type="button"
             onClick={() => startBattleMutation.mutate()}
             disabled={!setupReady || startBattleMutation.isPending}
-            className="rounded-lg border border-white/15 bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-xl border border-white/15 bg-white px-5 py-3 text-sm font-semibold text-black transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {startBattleMutation.isPending ? "Starting..." : "Start Battle"}
+            {startBattleMutation.isPending ? "Starting battle..." : "Start Battle"}
           </button>
           {!setupReady && (
             <div className="self-center text-xs text-white/45">
-              Select Pokémon for both P1 and P2 to continue.
+              {setup.teamSource === "saved"
+                ? "Select a saved team for both P1 and CPU to continue."
+                : setup.teamSource === "manual"
+                  ? "Select Pokémon for both P1 and P2 to continue."
+                  : "Choose a valid setup to continue."}
             </div>
           )}
         </div>
