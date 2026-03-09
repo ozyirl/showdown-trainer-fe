@@ -156,7 +156,10 @@ export const COMMON_MOVES = [
   "Sucker Punch",
 ];
 
-const NATURE_EFFECTS: Record<string, { up?: keyof BaseStats; down?: keyof BaseStats }> = {
+const NATURE_EFFECTS: Record<
+  string,
+  { up?: keyof BaseStats; down?: keyof BaseStats }
+> = {
   Lonely: { up: "atk", down: "def" },
   Brave: { up: "atk", down: "spe" },
   Adamant: { up: "atk", down: "spa" },
@@ -202,7 +205,11 @@ export interface PokemonDetails {
   tier?: string;
 }
 
-export function rankSearch(items: string[], query: string, limit = 20): string[] {
+export function rankSearch(
+  items: string[],
+  query: string,
+  limit = 20,
+): string[] {
   const q = query.trim().toLowerCase();
   const source = Array.from(new Set(items));
   if (!q) return source.slice(0, limit);
@@ -218,13 +225,19 @@ export function rankSearch(items: string[], query: string, limit = 20): string[]
       return { item, score, pos: value.indexOf(q) };
     })
     .filter((row) => row.score < 9999)
-    .sort((a, b) => a.score - b.score || a.pos - b.pos || a.item.localeCompare(b.item))
+    .sort(
+      (a, b) =>
+        a.score - b.score || a.pos - b.pos || a.item.localeCompare(b.item),
+    )
     .slice(0, limit)
     .map((row) => row.item);
 }
 
-export async function searchPokemonCatalog(query: string, limit = 25): Promise<PokemonLookup[]> {
-  const base = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:5200/api";
+export async function searchPokemonCatalog(
+  query: string,
+  limit = 25,
+): Promise<PokemonLookup[]> {
+  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5200/api";
   const response = await fetch(
     `${base}/battle/pokemon?q=${encodeURIComponent(query)}&limit=${limit}`,
   );
@@ -234,21 +247,31 @@ export async function searchPokemonCatalog(query: string, limit = 25): Promise<P
   const data = (await response.json()) as unknown;
   if (!Array.isArray(data)) return [];
   return data
-    .map((entry) => (entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null))
+    .map((entry) =>
+      entry && typeof entry === "object"
+        ? (entry as Record<string, unknown>)
+        : null,
+    )
     .filter(Boolean)
     .map((entry) => ({
       name: String(entry?.name ?? ""),
-      types: Array.isArray(entry?.types) ? (entry?.types as string[]) : undefined,
+      types: Array.isArray(entry?.types)
+        ? (entry?.types as string[])
+        : undefined,
       tier: typeof entry?.tier === "string" ? entry.tier : undefined,
     }))
     .filter((entry) => entry.name);
 }
 
-export async function fetchPokemonDetails(species: string): Promise<PokemonDetails | null> {
+export async function fetchPokemonDetails(
+  species: string,
+): Promise<PokemonDetails | null> {
   const q = species.trim();
   if (!q) return null;
-  const base = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:5200/api";
-  const response = await fetch(`${base}/battle/pokemon/${encodeURIComponent(q)}`);
+  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5200/api";
+  const response = await fetch(
+    `${base}/battle/pokemon/${encodeURIComponent(q)}`,
+  );
   if (!response.ok) return null;
   const data = (await response.json()) as Partial<PokemonDetails>;
   if (!data?.baseStats || !data.name) return null;
@@ -261,7 +284,10 @@ export async function fetchPokemonDetails(species: string): Promise<PokemonDetai
   };
 }
 
-export function getNatureModifier(nature: string, stat: keyof BaseStats): number {
+export function getNatureModifier(
+  nature: string,
+  stat: keyof BaseStats,
+): number {
   if (stat === "hp") return 1;
   const effect = NATURE_EFFECTS[nature];
   if (!effect) return 1;
@@ -280,9 +306,14 @@ export function calculateStat(
 ): number {
   if (stat === "hp") {
     if (base === 1) return 1;
-    return Math.floor(((2 * base + iv + Math.floor(ev / 4)) * level) / 100) + level + 10;
+    return (
+      Math.floor(((2 * base + iv + Math.floor(ev / 4)) * level) / 100) +
+      level +
+      10
+    );
   }
-  const raw = Math.floor(((2 * base + iv + Math.floor(ev / 4)) * level) / 100) + 5;
+  const raw =
+    Math.floor(((2 * base + iv + Math.floor(ev / 4)) * level) / 100) + 5;
   return Math.floor(raw * getNatureModifier(nature, stat));
 }
 

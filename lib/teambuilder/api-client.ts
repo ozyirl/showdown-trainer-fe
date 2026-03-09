@@ -1,5 +1,15 @@
-import type { Team, TeamCreateInput, TeamPatchInput, PokemonSlot, ApiErrorPayload } from "@/lib/teambuilder/types";
-import { coerceTeamListResponse, normalizeTeam, sanitizeTeamForSave } from "@/lib/teambuilder/types";
+import type {
+  Team,
+  TeamCreateInput,
+  TeamPatchInput,
+  PokemonSlot,
+  ApiErrorPayload,
+} from "@/lib/teambuilder/types";
+import {
+  coerceTeamListResponse,
+  normalizeTeam,
+  sanitizeTeamForSave,
+} from "@/lib/teambuilder/types";
 
 export type ChatMessage = {
   role: "user" | "assistant";
@@ -26,7 +36,7 @@ export class ApiClientError extends Error {
 }
 
 function getBaseUrl() {
-  return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:5200/api";
+  return process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5200/api";
 }
 
 async function parseJsonSafe(response: Response): Promise<unknown> {
@@ -68,7 +78,9 @@ export function createTeambuilderApiClient(getToken: TokenGetter) {
       throw new ApiClientError(
         getErrorMessage(payload, `Request failed (${response.status})`),
         response.status,
-        typeof payload === "object" && payload ? (payload as ApiErrorPayload) : undefined,
+        typeof payload === "object" && payload
+          ? (payload as ApiErrorPayload)
+          : undefined,
       );
     }
     return payload as T;
