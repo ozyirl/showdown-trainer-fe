@@ -236,10 +236,7 @@ export default function Home() {
                   Build your dream team, battle an AI opponent with real-time
                   reasoning, and sharpen your competitive strategy.
                 </p>
-                <p className="mt-2 max-w-sm text-sm leading-relaxed text-white/50">
-                  Powered by Pokemon Showdown&apos;s battle engine with live
-                  move analysis after every turn.
-                </p>
+
                 <Link
                   href="/battle"
                   className="group mt-4 flex items-center gap-2 text-sm font-medium text-white/60 transition-colors hover:text-white"
