@@ -111,6 +111,7 @@ type BattleState = {
     reasoning?: string;
     rawResponse?: unknown;
     error?: string;
+    truncated?: boolean;
   } | null;
   lastAction?: string | MoveAcceptedAction | null;
 };
@@ -127,6 +128,7 @@ type CpuStreamDecisionSummary = {
   reasoning?: string;
   rawResponse?: string;
   error?: string;
+  truncated?: boolean;
 };
 
 type ParsedCpuDecision = {
@@ -319,13 +321,21 @@ const RANDOM_BATTLE_OPTIONS: FormatOption[] = [
 
 const STANDARD_BATTLE_OPTIONS: FormatOption[] = [
   { value: "ou", label: "OU", description: "Standard overused singles." },
-  { value: "ubers", label: "Ubers", description: "High-power restricted format." },
+  {
+    value: "ubers",
+    label: "Ubers",
+    description: "High-power restricted format.",
+  },
   { value: "uu", label: "UU", description: "Underused singles." },
   { value: "ru", label: "RU", description: "Rarely used singles." },
   { value: "nu", label: "NU", description: "Never used singles." },
   { value: "pu", label: "PU", description: "Lower-tier singles." },
   { value: "lc", label: "LC", description: "Little Cup." },
-  { value: "monotype", label: "Monotype", description: "Single-type team constraint." },
+  {
+    value: "monotype",
+    label: "Monotype",
+    description: "Single-type team constraint.",
+  },
   { value: "cap", label: "CAP", description: "Create-A-Pokemon ruleset." },
   {
     value: "customgame",
@@ -357,7 +367,11 @@ const CPU_MODEL_OPTIONS: Array<{
   label: string;
   description: string;
 }> = [
-  { value: "fast", label: "Fast model", description: "Lower-latency CPU turns." },
+  {
+    value: "fast",
+    label: "Fast model",
+    description: "Lower-latency CPU turns.",
+  },
   {
     value: "reasoning",
     label: "Reasoning model",
@@ -381,7 +395,10 @@ function resolveBattleFormats(setup: BattleSetupState) {
   if (setup.teamSource === "random") {
     return {
       formatid: buildFormatId(setup.generation, setup.randomBattleType),
-      randomTeamFormatid: buildFormatId(setup.generation, setup.randomBattleType),
+      randomTeamFormatid: buildFormatId(
+        setup.generation,
+        setup.randomBattleType,
+      ),
     };
   }
 
@@ -401,7 +418,9 @@ function readStoredBattleUiPrefs(
   if (!battleId || typeof window === "undefined") return null;
 
   try {
-    const raw = window.sessionStorage.getItem(battleUiPrefsStorageKey(battleId));
+    const raw = window.sessionStorage.getItem(
+      battleUiPrefsStorageKey(battleId),
+    );
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<ActiveBattleUiState>;
     if (
@@ -450,7 +469,10 @@ function teamToBattleRoster(team: Team | null | undefined, level: number) {
       nickname: slot.nickname?.trim() || undefined,
       item: slot.item.trim() || undefined,
       ability: slot.ability.trim() || undefined,
-      moves: slot.moves.map((move) => move.trim()).filter(Boolean).slice(0, 4),
+      moves: slot.moves
+        .map((move) => move.trim())
+        .filter(Boolean)
+        .slice(0, 4),
       nature: slot.nature.trim() || undefined,
       evs: slot.evs,
       ivs: slot.ivs,
@@ -461,7 +483,7 @@ function teamToBattleRoster(team: Team | null | undefined, level: number) {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const panelClass =
-  "rounded-2xl border border-white/10 bg-white/[0.03] p-6 backdrop-blur";
+  "rounded-2xl border border-white/10 bg-white/3 p-6 backdrop-blur";
 
 type InteractiveBattleProps = {
   initialBattleId?: string | null;
@@ -599,9 +621,16 @@ function useCpuStream(battleId: string | null): CpuStreamState {
   const [isStreaming, setIsStreaming] = useState(false);
   const [isAvailable, setIsAvailable] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [decision, setDecision] = useState<CpuStreamDecisionSummary | null>(null);
+  const [decision, setDecision] = useState<CpuStreamDecisionSummary | null>(
+    null,
+  );
+  const [prevBattleId, setPrevBattleId] = useState<string | null>(battleId);
 
-  useEffect(() => {
+  const hasEventSource =
+    typeof window !== "undefined" && typeof window.EventSource !== "undefined";
+
+  if (battleId !== prevBattleId) {
+    setPrevBattleId(battleId);
     if (!battleId) {
       setBuffer("");
       setVisibleLength(0);
@@ -609,15 +638,15 @@ function useCpuStream(battleId: string | null): CpuStreamState {
       setError(null);
       setDecision(null);
       setIsAvailable(true);
+    } else {
+      setIsAvailable(hasEventSource);
+    }
+  }
+
+  useEffect(() => {
+    if (!battleId || !hasEventSource) {
       return;
     }
-
-    if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
-      setIsAvailable(false);
-      return;
-    }
-
-    setIsAvailable(true);
     const eventSource = new window.EventSource(
       `${API_URL}/battle/${battleId}/cpu-stream`,
     );
@@ -687,7 +716,10 @@ function useCpuStream(battleId: string | null): CpuStreamState {
     eventSource.addEventListener("start", handleStart as EventListener);
     eventSource.addEventListener("chunk", handleChunk as EventListener);
     eventSource.addEventListener("done", handleDone as EventListener);
-    eventSource.addEventListener("model-error", handleModelError as EventListener);
+    eventSource.addEventListener(
+      "model-error",
+      handleModelError as EventListener,
+    );
 
     return () => {
       eventSource.removeEventListener("start", handleStart as EventListener);
@@ -699,13 +731,16 @@ function useCpuStream(battleId: string | null): CpuStreamState {
       );
       eventSource.close();
     };
-  }, [battleId]);
+  }, [battleId, hasEventSource]);
 
   useEffect(() => {
     if (visibleLength >= buffer.length) return;
     const timeout = window.setTimeout(() => {
       setVisibleLength((current) =>
-        Math.min(buffer.length, current + Math.max(1, Math.ceil((buffer.length - current) / 10))),
+        Math.min(
+          buffer.length,
+          current + Math.max(1, Math.ceil((buffer.length - current) / 10)),
+        ),
       );
     }, 18);
     return () => window.clearTimeout(timeout);
@@ -752,10 +787,11 @@ function useCopilotHistory(
     inflightKeyRef.current = requestKey;
 
     let cancelled = false;
-    setIsLoading(true);
 
-    fetchCopilotGuidance(battleId)
-      .then((guidance) => {
+    const doFetch = async () => {
+      setIsLoading(true);
+      try {
+        const guidance = await fetchCopilotGuidance(battleId);
         if (cancelled) return;
         fetchedKeysRef.current.add(requestKey);
         if (guidance.disabled) return;
@@ -763,18 +799,18 @@ function useCopilotHistory(
           ...prev,
           { turn: currentTurn, phase: phase ?? "unknown", guidance },
         ]);
-      })
-      .catch(() => {
+      } catch {
         // Allow retry on failure by not adding to fetchedKeysRef
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) {
           setIsLoading(false);
           if (inflightKeyRef.current === requestKey) {
             inflightKeyRef.current = null;
           }
         }
-      });
+      }
+    };
+    doFetch();
 
     return () => {
       cancelled = true;
@@ -824,10 +860,13 @@ async function postBattleAck(params: { battleId: string; eventSeq: number }) {
 }
 
 async function postBattleContinue(params: { battleId: string }) {
-  const response = await fetch(`${API_URL}/battle/${params.battleId}/continue`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
+  const response = await fetch(
+    `${API_URL}/battle/${params.battleId}/continue`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    },
+  );
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     const error = new Error(text || `Continue failed (${response.status})`);
@@ -835,30 +874,6 @@ async function postBattleContinue(params: { battleId: string }) {
     throw error;
   }
   return response.json().catch(() => null);
-}
-
-async function postBattleMove(params: {
-  battleId: string;
-  player: "p1" | "p2";
-  moveIndex: number;
-}) {
-  const response = await fetch(`${API_URL}/battle/${params.battleId}/move`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      player: params.player,
-      moveIndex: params.moveIndex,
-    }),
-  });
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    const error = new Error(body || `Move submit failed (${response.status})`);
-    (error as Error & { status?: number }).status = response.status;
-    throw error;
-  }
-
-  return response.json() as Promise<BattleState>;
 }
 
 function normalizePlaybackEvent(raw: unknown): PlaybackEvent | null {
@@ -987,19 +1002,25 @@ function extractReadableEventText(
   if (type.toUpperCase() === "ITEM_HEAL") {
     const source = pickStringValue(data, payload, "sourceName") ?? "item";
     const delta = pickNumberValue(data, payload, "deltaPercent");
-    if (typeof delta === "number") return `${formatSignedDelta(delta)} from ${source}`;
+    if (typeof delta === "number")
+      return `${formatSignedDelta(delta)} from ${source}`;
     return `Recovered HP from ${source}`;
   }
   if (type.toUpperCase() === "ABILITY_HEAL") {
     const source = pickStringValue(data, payload, "sourceName") ?? "ability";
     const delta = pickNumberValue(data, payload, "deltaPercent");
-    if (typeof delta === "number") return `${formatSignedDelta(delta)} from ${source}`;
+    if (typeof delta === "number")
+      return `${formatSignedDelta(delta)} from ${source}`;
     return `Recovered HP from ${source}`;
   }
-  if (type.toUpperCase() === "STATUS_TICK" || type.toUpperCase() === "WEATHER_TICK") {
+  if (
+    type.toUpperCase() === "STATUS_TICK" ||
+    type.toUpperCase() === "WEATHER_TICK"
+  ) {
     const source = pickStringValue(data, payload, "sourceName") ?? "effect";
     const delta = pickNumberValue(data, payload, "deltaPercent");
-    if (typeof delta === "number") return `${formatSignedDelta(delta)} from ${source}`;
+    if (typeof delta === "number")
+      return `${formatSignedDelta(delta)} from ${source}`;
     return `HP changed from ${source}`;
   }
 
@@ -1097,61 +1118,13 @@ async function postBattleAction(params: {
   return response.json() as Promise<BattleState>;
 }
 
-function formatTurnLogEntry(entry: BattleState["turnLog"][number], p1Name = "You") {
+function formatTurnLogEntry(
+  entry: BattleState["turnLog"][number],
+  p1Name = "You",
+) {
   if (typeof entry === "string") return entry;
   const actor = entry.player === "p1" ? p1Name : "Opponent";
   return `${actor} selected ${entry.moveName} (#${entry.moveIndex}).`;
-}
-
-function normalizeHpLogLine(line: string) {
-  const match = line.match(/^(.+?) HP:\s*(\d+)\/(\d+)$/);
-  if (!match) return null;
-
-  const [, pokemon, currentRaw, maxRaw] = match;
-  const current = Number(currentRaw);
-  const max = Number(maxRaw);
-  if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0)
-    return line;
-
-  const pct = Math.round((current / max) * 100);
-  return `${pokemon} HP: ${Math.max(0, Math.min(100, pct))}/100`;
-}
-
-function buildDisplayLog(
-  turnLog: BattleState["turnLog"],
-  localActions: string[],
-  p1Name = "You",
-) {
-  const merged = [...localActions, ...turnLog.map((e) => formatTurnLogEntry(e, p1Name))];
-  const out: string[] = [];
-
-  for (const line of merged) {
-    const normalizedHp = normalizeHpLogLine(line);
-    const next = normalizedHp ?? line;
-
-    if (normalizedHp) {
-      const name = normalizedHp.split(" HP:")[0];
-      const last = out[out.length - 1];
-      if (last && normalizeHpLogLine(last)?.startsWith(`${name} HP:`)) {
-        out[out.length - 1] = next;
-        continue;
-      }
-    }
-
-    if (out[out.length - 1] === next) continue;
-    out.push(next);
-  }
-
-  return out;
-}
-
-function diffTurnLogEntries(
-  previous: BattleState["turnLog"] | undefined,
-  next: BattleState["turnLog"],
-) {
-  const prevLen = previous?.length ?? 0;
-  if (next.length >= prevLen) return next.slice(prevLen);
-  return next;
 }
 
 function battleProgressSignature(state: BattleState | null | undefined) {
@@ -1235,13 +1208,13 @@ function extractLastJsonObject(text: string) {
         escaped = false;
       } else if (char === "\\") {
         escaped = true;
-      } else if (char === "\"") {
+      } else if (char === '"') {
         inString = false;
       }
       continue;
     }
 
-    if (char === "\"") {
+    if (char === '"') {
       inString = true;
       continue;
     }
@@ -1283,7 +1256,9 @@ function parseCpuDecisionRawResponseSync(raw?: string) {
       return {
         ...parsedCpuDecisionFromObject(parsed),
         rawResponse: raw,
-        cleanedText: normalizeCpuReasoningText(visibleText) ?? extractReasoningFromObject(parsed),
+        cleanedText:
+          normalizeCpuReasoningText(visibleText) ??
+          extractReasoningFromObject(parsed),
       } satisfies ParsedCpuDecision;
     } catch {
       // Ignore and continue to trailing object parsing.
@@ -1305,7 +1280,9 @@ function parseCpuDecisionRawResponseSync(raw?: string) {
     return {
       ...parsedCpuDecisionFromObject(parsed),
       rawResponse: raw,
-      cleanedText: normalizeCpuReasoningText(visibleText) ?? extractReasoningFromObject(parsed),
+      cleanedText:
+        normalizeCpuReasoningText(visibleText) ??
+        extractReasoningFromObject(parsed),
     } satisfies ParsedCpuDecision;
   } catch {
     const visibleText =
@@ -1361,7 +1338,9 @@ function extractReasoningFromObject(data: Record<string, unknown>) {
   return null;
 }
 
-function parsedCpuDecisionFromObject(data: Record<string, unknown>): ParsedCpuDecision {
+function parsedCpuDecisionFromObject(
+  data: Record<string, unknown>,
+): ParsedCpuDecision {
   return {
     moveIndex:
       typeof data.moveIndex === "number"
@@ -1452,77 +1431,6 @@ async function parseCpuDecisionRawResponse(raw?: string) {
   } satisfies ParsedCpuDecision;
 }
 
-function normalizeLastTurnEventsToLines(state: BattleState): string[] {
-  const events = Array.isArray(state.lastTurnEvents)
-    ? state.lastTurnEvents
-    : [];
-  const lines: string[] = [];
-
-  for (const event of events) {
-    if (typeof event === "string") {
-      if (event.trim()) lines.push(event.trim());
-      continue;
-    }
-    if (!event || typeof event !== "object") continue;
-    const data = event as Record<string, unknown>;
-
-    const textFields = ["display", "message", "text", "summary", "logLine"];
-    let pushed = false;
-    for (const key of textFields) {
-      const value = data[key];
-      if (typeof value === "string" && value.trim()) {
-        lines.push(value.trim());
-        pushed = true;
-        break;
-      }
-    }
-    if (pushed) continue;
-
-    const actor =
-      typeof data.actor === "string"
-        ? data.actor
-        : typeof data.player === "string"
-          ? data.player
-          : null;
-    const moveName =
-      typeof data.moveName === "string"
-        ? data.moveName
-        : typeof data.move === "string"
-          ? data.move
-          : null;
-    const type =
-      typeof data.type === "string"
-        ? data.type.toLowerCase()
-        : typeof data.kind === "string"
-          ? data.kind.toLowerCase()
-          : "";
-
-    if (
-      moveName &&
-      (type.includes("move") || type.includes("use") || type === "")
-    ) {
-      const actorLabel =
-        actor === "p1"
-          ? state.p1Pokemon.name
-          : actor === "p2"
-            ? state.p2Pokemon.name
-            : actor;
-      if (actorLabel) {
-        lines.push(`${actorLabel} used ${moveName}!`);
-        continue;
-      }
-      lines.push(`Move used: ${moveName}`);
-      continue;
-    }
-
-    if (typeof data.reason === "string" && data.reason.trim()) {
-      lines.push(data.reason.trim());
-    }
-  }
-
-  return buildDisplayLog(lines, []).filter(isNarrationLineRelevant);
-}
-
 function extractCpuReasoningText(decision: BattleState["lastCpuDecision"]) {
   if (!decision) return null;
   if (typeof decision.reasoning === "string" && decision.reasoning.trim()) {
@@ -1537,10 +1445,7 @@ function extractCpuReasoningText(decision: BattleState["lastCpuDecision"]) {
       parsed?.reasoning ??
       normalizeCpuReasoningText(raw.trim()) ??
       raw.trim();
-    return (
-      fallbackText ||
-      null
-    );
+    return fallbackText || null;
   }
   if (raw && typeof raw === "object") {
     const data = raw as Record<string, unknown>;
@@ -1565,27 +1470,10 @@ function formatCpuRawOutput(raw: unknown) {
   }
 }
 
-function isNarrationLineRelevant(line: string) {
-  const lower = line.toLowerCase();
-  if (normalizeHpLogLine(line)) return false;
-  if (lower.includes(" pp")) return false;
-  return true;
-}
-
-function getMoveActorFromLine(
-  line: string,
-  stateBefore: BattleState,
-): "p1" | "p2" | null {
-  const lower = line.toLowerCase();
-  if (!lower.includes(" used ")) return null;
-  if (lower.includes(stateBefore.p1Pokemon.name.toLowerCase())) return "p1";
-  if (lower.includes(stateBefore.p2Pokemon.name.toLowerCase())) return "p2";
-  if (lower.startsWith("you ")) return "p1";
-  if (lower.startsWith("opponent ")) return "p2";
-  return null;
-}
-
-function formatLastAction(lastAction: BattleState["lastAction"], p1Name = "You") {
+function formatLastAction(
+  lastAction: BattleState["lastAction"],
+  p1Name = "You",
+) {
   if (!lastAction) return null;
   if (typeof lastAction === "string") return lastAction;
   return formatTurnLogEntry(lastAction, p1Name);
@@ -1628,7 +1516,8 @@ function deriveStatusText(params: {
   errorMessage: string | null;
   p1Name?: string;
 }) {
-  const { state, pendingActionLabel, isSubmitting, errorMessage, p1Name } = params;
+  const { state, pendingActionLabel, isSubmitting, errorMessage, p1Name } =
+    params;
 
   if (errorMessage) return `Error: ${errorMessage}`;
   if (!state) return "Loading battle state...";
@@ -1639,7 +1528,10 @@ function deriveStatusText(params: {
     return `CPU is choosing an action... (${pendingActionLabel} selected)`;
   }
   if (isSubmitting) return "CPU is choosing an action...";
-  if (state.awaitingAckEventSeq != null || state.phase === "awaiting-event-ack") {
+  if (
+    state.awaitingAckEventSeq != null ||
+    state.phase === "awaiting-event-ack"
+  ) {
     return "Playing back events...";
   }
   if (state.phase === "team-preview") return "Choose team order (e.g. 123456).";
@@ -1681,30 +1573,69 @@ function typeChipText(types: string[]) {
   return types.length ? types.join(" / ") : "Unknown type";
 }
 
-function getStatusDisplay(status: string | null): { emoji: string; label: string; colorClass: string } | null {
+function getStatusDisplay(
+  status: string | null,
+): { emoji: string; label: string; colorClass: string } | null {
   if (!status) return null;
-  const map: Record<string, { emoji: string; label: string; colorClass: string }> = {
-    brn: { emoji: "🔥", label: "Burn", colorClass: "text-orange-400 bg-orange-400/15 border-orange-400/30" },
-    par: { emoji: "⚡", label: "Paralysis", colorClass: "text-yellow-400 bg-yellow-400/15 border-yellow-400/30" },
-    psn: { emoji: "☠️", label: "Poison", colorClass: "text-purple-400 bg-purple-400/15 border-purple-400/30" },
-    tox: { emoji: "☠️", label: "Toxic", colorClass: "text-fuchsia-400 bg-fuchsia-400/15 border-fuchsia-400/30" },
-    slp: { emoji: "💤", label: "Sleep", colorClass: "text-blue-300 bg-blue-300/15 border-blue-300/30" },
-    frz: { emoji: "❄️", label: "Frozen", colorClass: "text-cyan-300 bg-cyan-300/15 border-cyan-300/30" },
+  const map: Record<
+    string,
+    { emoji: string; label: string; colorClass: string }
+  > = {
+    brn: {
+      emoji: "🔥",
+      label: "Burn",
+      colorClass: "text-orange-400 bg-orange-400/15 border-orange-400/30",
+    },
+    par: {
+      emoji: "⚡",
+      label: "Paralysis",
+      colorClass: "text-yellow-400 bg-yellow-400/15 border-yellow-400/30",
+    },
+    psn: {
+      emoji: "☠️",
+      label: "Poison",
+      colorClass: "text-purple-400 bg-purple-400/15 border-purple-400/30",
+    },
+    tox: {
+      emoji: "☠️",
+      label: "Toxic",
+      colorClass: "text-fuchsia-400 bg-fuchsia-400/15 border-fuchsia-400/30",
+    },
+    slp: {
+      emoji: "💤",
+      label: "Sleep",
+      colorClass: "text-blue-300 bg-blue-300/15 border-blue-300/30",
+    },
+    frz: {
+      emoji: "❄️",
+      label: "Frozen",
+      colorClass: "text-cyan-300 bg-cyan-300/15 border-cyan-300/30",
+    },
   };
   return map[status] ?? null;
 }
 
 function formatBoostLabel(stat: string, amount: number): string {
   const statNames: Record<string, string> = {
-    atk: "Atk", def: "Def", spa: "SpA", spd: "SpD", spe: "Spe",
-    accuracy: "Acc", evasion: "Eva",
+    atk: "Atk",
+    def: "Def",
+    spa: "SpA",
+    spd: "SpD",
+    spe: "Spe",
+    accuracy: "Acc",
+    evasion: "Eva",
   };
   const name = statNames[stat] || stat;
   return `${amount > 0 ? "+" : ""}${amount} ${name}`;
 }
 
 function normalizeSpriteName(name: string): string {
-  return name.trim().toLowerCase().replace(/[\s.':-]/g, "").replace(/♀/g, "f").replace(/♂/g, "m");
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[\s.':-]/g, "")
+    .replace(/♀/g, "f")
+    .replace(/♂/g, "m");
 }
 
 function getSpriteUrl(name: string): string {
@@ -1717,17 +1648,14 @@ function getSpriteFallbackUrl(name: string): string {
   return `https://play.pokemonshowdown.com/sprites/gen5/${normalizeSpriteName(name)}.png`;
 }
 
-function getPokeApiFallbackUrl(name: string): string {
-  if (!name || name === "Unknown") return "";
-  const normalized = normalizeSpriteName(name);
-  return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${normalized}.png`;
-}
-
 function formatItemName(item: string | null | undefined): string | null {
   if (!item) return null;
   const trimmed = item.trim();
   if (!trimmed) return null;
-  if (trimmed.includes(" ") || trimmed.charAt(0) === trimmed.charAt(0).toUpperCase()) {
+  if (
+    trimmed.includes(" ") ||
+    trimmed.charAt(0) === trimmed.charAt(0).toUpperCase()
+  ) {
     return trimmed;
   }
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
@@ -1755,48 +1683,6 @@ function mergePlaybackEvents(
   for (const event of previous) map.set(event.seq, event);
   for (const event of next) map.set(event.seq, event);
   return Array.from(map.values()).sort((a, b) => a.seq - b.seq);
-}
-
-function isBlockingEventType(type: string) {
-  const upper = type.toUpperCase();
-  return (
-    upper.includes("FAINT") ||
-    upper.includes("REQUEST_SWITCH") ||
-    upper.includes("REQUEST_MOVE") ||
-    upper.includes("TURN_END") ||
-    upper.includes("TURN_START")
-  );
-}
-
-function eventBadgeClass(type: string) {
-  const upper = type.toUpperCase();
-  if (upper === "TURN_START") return "border-amber-400/30 bg-amber-400/10 text-amber-200";
-  if (upper.includes("REQUEST")) return "border-blue-400/30 bg-blue-400/10 text-blue-200";
-  if (upper.includes("FAINT")) return "border-red-400/30 bg-red-400/10 text-red-200";
-  if (upper.includes("TURN_END")) return "border-zinc-400/30 bg-zinc-400/10 text-zinc-200";
-  if (
-    upper.includes("ITEM_HEAL") ||
-    upper.includes("ABILITY_HEAL") ||
-    upper.includes("STATUS_TICK") ||
-    upper.includes("WEATHER_TICK")
-  ) {
-    return "border-emerald-400/30 bg-emerald-400/10 text-emerald-200";
-  }
-  if (upper === "BOOST" || upper === "UNBOOST") return "border-violet-400/30 bg-violet-400/10 text-violet-200";
-  if (upper === "ITEM" || upper === "ENDITEM") return "border-yellow-400/30 bg-yellow-400/10 text-yellow-200";
-  if (upper === "ABILITY") return "border-cyan-400/30 bg-cyan-400/10 text-cyan-200";
-  if (upper === "WEATHER" || upper === "FIELD_START" || upper === "FIELD_END") return "border-sky-400/30 bg-sky-400/10 text-sky-200";
-  if (upper === "IMMUNE" || upper === "BLOCK") return "border-gray-400/30 bg-gray-400/10 text-gray-300";
-  if (upper === "SIDE_START" || upper === "SIDE_END") return "border-orange-400/30 bg-orange-400/10 text-orange-200";
-  if (upper === "VOLATILE_START" || upper === "VOLATILE_END" || upper === "CURE_STATUS") return "border-pink-400/30 bg-pink-400/10 text-pink-200";
-  if (upper === "HIT_COUNT" || upper === "OHKO") return "border-rose-400/30 bg-rose-400/10 text-rose-200";
-  return "border-white/20 bg-white/[0.06] text-white/75";
-}
-
-function getEventDeltaLabel(event: PlaybackEvent) {
-  if (typeof event.deltaPercent !== "number") return null;
-  const source = event.sourceName ?? event.sourceType ?? "effect";
-  return `${formatSignedDelta(event.deltaPercent)} from ${source}`;
 }
 
 function eventKeyForDedup(event: PlaybackEvent) {
@@ -1908,7 +1794,7 @@ function MoveSelector(params: {
             className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${
               autoMoves
                 ? "border-white/20 bg-white text-black"
-                : "border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.06]"
+                : "border-white/10 bg-white/3 text-white/70 hover:bg-white/6"
             }`}
           >
             Auto-select moves
@@ -1916,7 +1802,7 @@ function MoveSelector(params: {
           <button
             type="button"
             onClick={onClearMoves}
-            className="rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs text-white/70 transition-colors hover:bg-white/[0.06]"
+            className="rounded-md border border-white/10 bg-white/3 px-2.5 py-1 text-xs text-white/70 transition-colors hover:bg-white/6"
           >
             Clear
           </button>
@@ -1948,7 +1834,7 @@ function MoveSelector(params: {
                 className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors ${
                   selected
                     ? "border-white/20 bg-white/10 text-white"
-                    : "border-white/5 bg-transparent text-white/75 hover:border-white/15 hover:bg-white/[0.03]"
+                    : "border-white/5 bg-transparent text-white/75 hover:border-white/15 hover:bg-white/3"
                 } disabled:cursor-not-allowed disabled:opacity-40`}
               >
                 <div className="min-w-0">
@@ -2032,7 +1918,7 @@ function PokemonSetupPanel(params: {
           <button
             type="button"
             onClick={onClearPokemon}
-            className="rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs text-white/70 hover:bg-white/[0.06]"
+            className="rounded-md border border-white/10 bg-white/3 px-2.5 py-1 text-xs text-white/70 hover:bg-white/6"
           >
             Clear Pokémon
           </button>
@@ -2066,7 +1952,7 @@ function PokemonSetupPanel(params: {
                   key={pokemon.name}
                   type="button"
                   onClick={() => onSelectPokemon(pokemon)}
-                  className="w-full rounded-md border border-white/5 px-3 py-2 text-left transition-colors hover:border-white/15 hover:bg-white/[0.03]"
+                  className="w-full rounded-md border border-white/5 px-3 py-2 text-left transition-colors hover:border-white/15 hover:bg-white/3"
                 >
                   <div className="text-sm font-medium text-white">
                     {pokemon.name}
@@ -2145,7 +2031,9 @@ function CopilotMessageCard({ entry }: { entry: CopilotHistoryEntry }) {
       </div>
 
       <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-2.5">
-        <div className="text-xs font-medium text-white">{g.recommendedLabel}</div>
+        <div className="text-xs font-medium text-white">
+          {g.recommendedLabel}
+        </div>
         <div className="mt-1 text-[11px] leading-relaxed text-white/60">
           {g.reasoning}
         </div>
@@ -2184,13 +2072,17 @@ function CopilotMessageCard({ entry }: { entry: CopilotHistoryEntry }) {
 
       <div className="flex gap-1.5 text-[10px]">
         <div className="flex-1 rounded-md border border-amber-500/10 bg-amber-500/5 px-2 py-1">
-          <span className="font-semibold uppercase text-amber-400/60">Risk </span>
+          <span className="font-semibold uppercase text-amber-400/60">
+            Risk{" "}
+          </span>
           <span className="text-white/55">{g.mainRisk}</span>
         </div>
       </div>
       <div className="text-[10px]">
         <div className="rounded-md border border-purple-500/10 bg-purple-500/5 px-2 py-1">
-          <span className="font-semibold uppercase text-purple-400/60">Win con </span>
+          <span className="font-semibold uppercase text-purple-400/60">
+            Win con{" "}
+          </span>
           <span className="text-white/55">{g.winConditionNote}</span>
         </div>
       </div>
@@ -2260,7 +2152,6 @@ function BattleArena(params: {
     turnLogGroups,
     lastAckedSeq,
     awaitingAckEventSeq,
-    collapsedTurns,
     playbackError,
     playerName,
     copilotEnabled,
@@ -2268,7 +2159,6 @@ function BattleArena(params: {
     cpuModelProfile,
     copilotHistory,
     copilotLoading,
-    onToggleTurnCollapse,
     onSubmitAction,
     onContinue,
     continuePending,
@@ -2279,25 +2169,41 @@ function BattleArena(params: {
   const [cpuReasoningExpanded, setCpuReasoningExpanded] = useState(false);
   const loggerRef = useRef<HTMLDivElement | null>(null);
 
+  const [prevWasStreaming, setPrevWasStreaming] = useState(
+    cpuStream.isStreaming,
+  );
+  if (cpuStream.isStreaming !== prevWasStreaming) {
+    setPrevWasStreaming(cpuStream.isStreaming);
+    if (!cpuStream.isStreaming) {
+      setCpuThinkingIndex(0);
+    }
+  }
+
+  const cpuDecisionTurn = cpuStream.decision?.turn;
+  const lastCpuTurn = battleState.lastCpuDecision?.turn;
+  const [prevCpuTurnKey, setPrevCpuTurnKey] = useState(
+    `${cpuDecisionTurn}-${lastCpuTurn}`,
+  );
+  const cpuTurnKey = `${cpuDecisionTurn}-${lastCpuTurn}`;
+  if (cpuTurnKey !== prevCpuTurnKey) {
+    setPrevCpuTurnKey(cpuTurnKey);
+    setCpuReasoningExpanded(false);
+  }
+
   useEffect(() => {
     if (!loggerRef.current) return;
     loggerRef.current.scrollTop = loggerRef.current.scrollHeight;
   }, [turnLogGroups]);
 
   useEffect(() => {
-    if (!cpuStream.isStreaming) {
-      setCpuThinkingIndex(0);
-      return;
-    }
+    if (!cpuStream.isStreaming) return;
     const interval = window.setInterval(() => {
-      setCpuThinkingIndex((current) => (current + 1) % CPU_THINKING_LABELS.length);
+      setCpuThinkingIndex(
+        (current) => (current + 1) % CPU_THINKING_LABELS.length,
+      );
     }, 1500);
     return () => window.clearInterval(interval);
   }, [cpuStream.isStreaming]);
-
-  useEffect(() => {
-    setCpuReasoningExpanded(false);
-  }, [cpuStream.decision?.turn, battleState.lastCpuDecision?.turn]);
 
   const playerCanAct =
     canPlayerAct(battleState, moveSubmitPending || isSubmittingMove) &&
@@ -2319,19 +2225,24 @@ function BattleArena(params: {
   const rawCpuOutput = formatCpuRawOutput(
     cpuStream.decision?.rawResponse ?? battleState.lastCpuDecision?.rawResponse,
   );
+  const isGenericFallback = (text: string | null | undefined) =>
+    !text || /^Fallback:\s/i.test(text);
+  const filteredCpuReasoning = isGenericFallback(cpuReasoning)
+    ? null
+    : cpuReasoning;
   const finalCpuReasoning = cpuStream.isStreaming
     ? null
-    : streamedCpuText || cpuReasoning || cpuStream.error;
+    : streamedCpuText || filteredCpuReasoning || cpuStream.error;
   const hasStructuredCpuSummary = Boolean(
     cpuDecisionSummary?.choice ||
-      cpuDecisionSummary?.moveName ||
-      cpuDecisionSummary?.moveIndex ||
-      cpuDecisionSummary?.actionType,
+    cpuDecisionSummary?.moveName ||
+    cpuDecisionSummary?.moveIndex ||
+    cpuDecisionSummary?.actionType,
   );
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4 backdrop-blur">
+      <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/3 px-5 py-4 backdrop-blur">
         <div>
           <div className="text-xs tracking-wide text-white/45">BATTLE</div>
           <div className="text-sm text-white/80">
@@ -2341,7 +2252,7 @@ function BattleArena(params: {
         <button
           type="button"
           onClick={onLeaveBattle}
-          className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/75 hover:bg-white/[0.06]"
+          className="rounded-lg border border-white/10 bg-white/3 px-3 py-2 text-sm text-white/75 hover:bg-white/6"
         >
           Back to Setup
         </button>
@@ -2376,7 +2287,10 @@ function BattleArena(params: {
                 </div>
               </div>
               <div className="mb-3 flex items-center gap-2 text-[11px] text-white/45">
-                <span>CPU profile: {cpuModelProfile}</span>
+                <span>
+                  CPU profile:{" "}
+                  {cpuModelProfile === "reasoning" ? "Reasoning" : "Fast"}
+                </span>
                 {copilotLoading && (
                   <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/20 border-t-blue-400" />
                 )}
@@ -2418,7 +2332,9 @@ function BattleArena(params: {
               return (
                 <div key={label} className={`${panelClass} group relative`}>
                   <div className="mb-3 flex items-center justify-between">
-                    <span className="text-sm font-medium text-white/60">{label}</span>
+                    <span className="text-sm font-medium text-white/60">
+                      {label}
+                    </span>
                     {p.ability && (
                       <span className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2 py-0.5 text-[10px] text-cyan-300">
                         {p.ability}
@@ -2457,14 +2373,18 @@ function BattleArena(params: {
                           </span>
                         )}
                         {statusInfo && (
-                          <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusInfo.colorClass}`}>
+                          <span
+                            className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusInfo.colorClass}`}
+                          >
                             {statusInfo.emoji} {statusInfo.label}
                           </span>
                         )}
                       </div>
                       <div className="flex justify-between text-xs text-white/60">
                         <span>HP</span>
-                        <span>{Math.round(p.hp)}/{Math.round(p.maxHp)}</span>
+                        <span>
+                          {Math.round(p.hp)}/{Math.round(p.maxHp)}
+                        </span>
                       </div>
                       <div className="h-2.5 w-full rounded-full bg-white/10">
                         <div
@@ -2480,18 +2400,19 @@ function BattleArena(params: {
                             📦 {itemLabel}
                           </span>
                         )}
-                        {boosts && Object.entries(boosts).map(([stat, amt]) => (
-                          <span
-                            key={stat}
-                            className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${
-                              amt > 0
-                                ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
-                                : "border-red-400/25 bg-red-400/10 text-red-300"
-                            }`}
-                          >
-                            {formatBoostLabel(stat, amt)}
-                          </span>
-                        ))}
+                        {boosts &&
+                          Object.entries(boosts).map(([stat, amt]) => (
+                            <span
+                              key={stat}
+                              className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${
+                                amt > 0
+                                  ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+                                  : "border-red-400/25 bg-red-400/10 text-red-300"
+                              }`}
+                            >
+                              {formatBoostLabel(stat, amt)}
+                            </span>
+                          ))}
                       </div>
                     </div>
                   </div>
@@ -2500,15 +2421,42 @@ function BattleArena(params: {
                       {p.types && p.types.length > 0 && (
                         <div className="mb-1.5 flex gap-1">
                           {p.types.map((t) => (
-                            <span key={t} className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-white/80">{t}</span>
+                            <span
+                              key={t}
+                              className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-white/80"
+                            >
+                              {t}
+                            </span>
                           ))}
                         </div>
                       )}
-                      <div className="text-white/60">Level: <span className="text-white/90">{p.level ?? 100}</span></div>
-                      {p.ability && <div className="text-white/60">Ability: <span className="text-white/90">{p.ability}</span></div>}
-                      {p.item && <div className="text-white/60">Item: <span className="text-white/90">{p.item}</span></div>}
-                      <div className="text-white/60">HP: <span className="text-white/90">{Math.round(p.hp)}/{Math.round(p.maxHp)}</span></div>
-                      {p.status && <div className="text-white/60">Status: <span className="text-white/90">{p.status}</span></div>}
+                      <div className="text-white/60">
+                        Level:{" "}
+                        <span className="text-white/90">{p.level ?? 100}</span>
+                      </div>
+                      {p.ability && (
+                        <div className="text-white/60">
+                          Ability:{" "}
+                          <span className="text-white/90">{p.ability}</span>
+                        </div>
+                      )}
+                      {p.item && (
+                        <div className="text-white/60">
+                          Item: <span className="text-white/90">{p.item}</span>
+                        </div>
+                      )}
+                      <div className="text-white/60">
+                        HP:{" "}
+                        <span className="text-white/90">
+                          {Math.round(p.hp)}/{Math.round(p.maxHp)}
+                        </span>
+                      </div>
+                      {p.status && (
+                        <div className="text-white/60">
+                          Status:{" "}
+                          <span className="text-white/90">{p.status}</span>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2518,255 +2466,301 @@ function BattleArena(params: {
 
           {!battleState.isEnded && (
             <div className={panelClass}>
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <h3 className="text-sm font-medium tracking-wide text-white/70">
-              Choose Your Action
-            </h3>
-            <div className="text-xs text-white/45">
-              {playerCanAct ? "Your turn" : "Input locked"}
-            </div>
-          </div>
-          {battleState.phase === "team-preview" ? (
-            <div className="space-y-3">
-              <div className="text-xs text-white/55">
-                Submit your team order (digits 1-6, each once).
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h3 className="text-sm font-medium tracking-wide text-white/70">
+                  Choose Your Action
+                </h3>
+                <div className="text-xs text-white/45">
+                  {playerCanAct ? "Your turn" : "Input locked"}
+                </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  value={teamOrder}
-                  onChange={(e) =>
-                    setTeamOrder(e.target.value.replace(/[^1-6]/g, "").slice(0, 6))
-                  }
-                  placeholder="123456"
-                  className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
-                />
-                <button
-                  type="button"
-                  onClick={() =>
-                    onSubmitAction({
-                      choice: `team ${teamOrder || "123456"}`,
-                      label: `team ${teamOrder || "123456"}`,
-                    })
-                  }
-                  disabled={!playerCanAct}
-                  className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/80 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Confirm Team Order
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {!forcedSwitchForP1 && battleState.availableMoves.length > 0 && (
-                <div className="space-y-2">
-                  <div className="text-xs uppercase tracking-wide text-white/45">
-                    Moves
+              {battleState.phase === "team-preview" ? (
+                <div className="space-y-3">
+                  <div className="text-xs text-white/55">
+                    Submit your team order (digits 1-6, each once).
                   </div>
-                  {battleState.availableMoves?.length === 1 &&
-                    battleState.p1Pokemon.item &&
-                    /choice/i.test(battleState.p1Pokemon.item) && (
-                      <div className="mb-2 rounded-md border border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-300">
-                        🔒 Locked into {battleState.availableMoves[0]?.name} by {battleState.p1Pokemon.item}
-                      </div>
-                    )}
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    {battleState.availableMoves.map((move, index) => {
-                      const choice = move.choice ?? `move ${move.index ?? index + 1}`;
-                      const moveIndex = move.index ?? index + 1;
-                      return (
-                        <button
-                          key={`${move.name}-${index}`}
-                          type="button"
-                          onClick={() =>
-                            onSubmitAction({
-                              choice,
-                              label: move.name,
-                              moveIndex,
-                            })
-                          }
-                          disabled={!playerCanAct}
-                          className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 text-left transition-colors hover:border-white/20 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          <div className="text-sm font-medium tracking-tight text-white">
-                            {move.name}
-                          </div>
-                          <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-white/55">
-                            <span>{move.type}</span>
-                            {move.category && <span>{move.category}</span>}
-                            {move.power ? <span>BP {move.power}</span> : null}
-                            <span>Acc {move.accuracy === true ? "—" : move.accuracy ?? "—"}</span>
-                          </div>
-                          <div className="mt-1 text-xs text-white/40">
-                            PP {move.pp}/{move.maxPp}
-                          </div>
-                        </button>
-                      );
-                    })}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      value={teamOrder}
+                      onChange={(e) =>
+                        setTeamOrder(
+                          e.target.value.replace(/[^1-6]/g, "").slice(0, 6),
+                        )
+                      }
+                      placeholder="123456"
+                      className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onSubmitAction({
+                          choice: `team ${teamOrder || "123456"}`,
+                          label: `team ${teamOrder || "123456"}`,
+                        })
+                      }
+                      disabled={!playerCanAct}
+                      className="rounded-lg border border-white/10 bg-white/3 px-3 py-2 text-sm text-white/80 transition-colors hover:bg-white/6 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Confirm Team Order
+                    </button>
                   </div>
                 </div>
-              )}
-              {(battleState.availableSwitches?.length ?? 0) > 0 && (
-                <div className="space-y-2">
-                  <div className="text-xs uppercase tracking-wide text-white/45">
-                    Switch
-                  </div>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    {battleState.availableSwitches?.map((option) => (
+              ) : (
+                <div className="space-y-4">
+                  {!forcedSwitchForP1 &&
+                    battleState.availableMoves.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="text-xs uppercase tracking-wide text-white/45">
+                          Moves
+                        </div>
+                        {battleState.availableMoves?.length === 1 &&
+                          battleState.p1Pokemon.item &&
+                          /choice/i.test(battleState.p1Pokemon.item) && (
+                            <div className="mb-2 rounded-md border border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-300">
+                              🔒 Locked into{" "}
+                              {battleState.availableMoves[0]?.name} by{" "}
+                              {battleState.p1Pokemon.item}
+                            </div>
+                          )}
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          {battleState.availableMoves.map((move, index) => {
+                            const choice =
+                              move.choice ?? `move ${move.index ?? index + 1}`;
+                            const moveIndex = move.index ?? index + 1;
+                            return (
+                              <button
+                                key={`${move.name}-${index}`}
+                                type="button"
+                                onClick={() =>
+                                  onSubmitAction({
+                                    choice,
+                                    label: move.name,
+                                    moveIndex,
+                                  })
+                                }
+                                disabled={!playerCanAct}
+                                className="rounded-xl border border-white/10 bg-white/2 px-4 py-3 text-left transition-colors hover:border-white/20 hover:bg-white/4 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                <div className="text-sm font-medium tracking-tight text-white">
+                                  {move.name}
+                                </div>
+                                <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-white/55">
+                                  <span>{move.type}</span>
+                                  {move.category && (
+                                    <span>{move.category}</span>
+                                  )}
+                                  {move.power ? (
+                                    <span>BP {move.power}</span>
+                                  ) : null}
+                                  <span>
+                                    Acc{" "}
+                                    {move.accuracy === true
+                                      ? "—"
+                                      : (move.accuracy ?? "—")}
+                                  </span>
+                                </div>
+                                <div className="mt-1 text-xs text-white/40">
+                                  PP {move.pp}/{move.maxPp}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  {(battleState.availableSwitches?.length ?? 0) > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-xs uppercase tracking-wide text-white/45">
+                        Switch
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        {battleState.availableSwitches?.map((option) => (
+                          <button
+                            key={option.choice}
+                            type="button"
+                            onClick={() =>
+                              onSubmitAction({
+                                choice: option.choice,
+                                label: `switch ${option.name}`,
+                              })
+                            }
+                            disabled={!playerCanAct}
+                            className="rounded-xl border border-white/10 bg-white/2 px-4 py-3 text-left transition-colors hover:border-white/20 hover:bg-white/4 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <div className="flex items-center gap-2">
+                              <img
+                                src={getSpriteFallbackUrl(option.name)}
+                                alt={option.name}
+                                className="h-8 w-8 object-contain"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = "none";
+                                }}
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5 text-sm font-medium tracking-tight text-white">
+                                  {option.name}
+                                  <span className="text-[10px] font-normal text-white/40">
+                                    Lv.{option.level ?? 100}
+                                  </span>
+                                </div>
+                                <div className="mt-0.5 text-xs text-white/55">
+                                  HP {Math.round(option.hp ?? 0)}/
+                                  {Math.round(option.maxHp ?? 0)}
+                                  {option.status ? ` • ${option.status}` : ""}
+                                </div>
+                                <div className="mt-0.5 flex flex-wrap gap-x-1.5 text-[10px] text-white/40">
+                                  {option.ability && (
+                                    <span>{option.ability}</span>
+                                  )}
+                                  {option.item && <span>📦 {option.item}</span>}
+                                </div>
+                              </div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {!forcedSwitchForP1 &&
+                    battleState.availableMoves.length === 0 &&
+                    (battleState.availableSwitches?.length ?? 0) === 0 && (
                       <button
-                        key={option.choice}
                         type="button"
                         onClick={() =>
                           onSubmitAction({
-                            choice: option.choice,
-                            label: `switch ${option.name}`,
+                            choice: "default",
+                            label: "default",
                           })
                         }
                         disabled={!playerCanAct}
-                        className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 text-left transition-colors hover:border-white/20 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+                        className="rounded-lg border border-white/10 bg-white/3 px-3 py-2 text-sm text-white/80 transition-colors hover:bg-white/6 disabled:cursor-not-allowed disabled:opacity-40"
                       >
-                        <div className="flex items-center gap-2">
-                          <img
-                            src={getSpriteFallbackUrl(option.name)}
-                            alt={option.name}
-                            className="h-8 w-8 object-contain"
-                            onError={(e) => {
-                              e.currentTarget.style.display = "none";
-                            }}
-                          />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5 text-sm font-medium tracking-tight text-white">
-                              {option.name}
-                              <span className="text-[10px] font-normal text-white/40">Lv.{option.level ?? 100}</span>
-                            </div>
-                            <div className="mt-0.5 text-xs text-white/55">
-                              HP {Math.round(option.hp ?? 0)}/{Math.round(option.maxHp ?? 0)}
-                              {option.status ? ` • ${option.status}` : ""}
-                            </div>
-                            <div className="mt-0.5 flex flex-wrap gap-x-1.5 text-[10px] text-white/40">
-                              {option.ability && <span>{option.ability}</span>}
-                              {option.item && <span>📦 {option.item}</span>}
-                            </div>
-                          </div>
-                        </div>
+                        Submit Default Action
                       </button>
-                    ))}
-                  </div>
+                    )}
+                  {battleState.phase === "awaiting-forced-switch-p2" &&
+                    battleState.awaitingAckEventSeq == null && (
+                      <button
+                        type="button"
+                        onClick={onContinue}
+                        disabled={
+                          continuePending ||
+                          moveSubmitPending ||
+                          isSubmittingMove
+                        }
+                        className="rounded-lg border border-white/10 bg-white/3 px-3 py-2 text-sm text-white/80 transition-colors hover:bg-white/6 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {continuePending ? "Continuing..." : "Continue"}
+                      </button>
+                    )}
                 </div>
               )}
-              {!forcedSwitchForP1 &&
-                battleState.availableMoves.length === 0 &&
-                (battleState.availableSwitches?.length ?? 0) === 0 && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onSubmitAction({ choice: "default", label: "default" })
-                    }
-                    disabled={!playerCanAct}
-                    className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/80 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Submit Default Action
-                  </button>
-                )}
-              {battleState.phase === "awaiting-forced-switch-p2" &&
-                battleState.awaitingAckEventSeq == null && (
-                  <button
-                    type="button"
-                    onClick={onContinue}
-                    disabled={continuePending || moveSubmitPending || isSubmittingMove}
-                    className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/80 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {continuePending ? "Continuing..." : "Continue"}
-                  </button>
-                )}
-            </div>
-          )}
-          <div className="mt-4 rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/70">
-            {statusText}
-          </div>
-          {moveSubmitError && (
-            <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-sm text-white/65">
-              {moveSubmitError}
-            </div>
-          )}
-          {legalOptionsMessage && (
-            <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-xs text-white/60">
-              {legalOptionsMessage}
+              <div className="mt-4 rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/70">
+                {statusText}
+              </div>
+              {moveSubmitError && (
+                <div className="mt-3 rounded-lg border border-white/10 bg-white/2 px-3 py-2 text-sm text-white/65">
+                  {moveSubmitError}
+                </div>
+              )}
+              {legalOptionsMessage && (
+                <div className="mt-3 rounded-lg border border-white/10 bg-white/2 px-3 py-2 text-xs text-white/60">
+                  {legalOptionsMessage}
+                </div>
+              )}
             </div>
           )}
         </div>
-      )}
-
-      </div>
 
         <div className="flex h-[72vh] min-h-0 flex-col gap-4">
           <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-medium tracking-wide text-white/70">
-              Turn Logger
-            </h3>
-            <div className="text-xs text-white/50">
-              Acked: {lastAckedSeq}
-              {awaitingAckEventSeq != null ? ` • Pending: ${awaitingAckEventSeq}` : ""}
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-medium tracking-wide text-white/70">
+                Turn Logger
+              </h3>
+              <div className="text-xs text-white/50">
+                Acked: {lastAckedSeq}
+                {awaitingAckEventSeq != null
+                  ? ` • Pending: ${awaitingAckEventSeq}`
+                  : ""}
+              </div>
             </div>
-          </div>
-          {playbackError && (
-            <div className="mb-3 rounded-md border border-white/10 bg-white/[0.02] px-2.5 py-2 text-xs text-white/65">
-              {playbackError}
-            </div>
-          )}
-          <div
-            ref={loggerRef}
-            className="flex-1 overflow-y-auto rounded-xl border border-white/10 bg-black/50 p-3"
-          >
-            <div className="space-y-4">
-              {turnLogGroups
-                .filter((group) => group.turn <= 0)
-                .flatMap((group) => group.events)
-                .filter((event) => !isControlEvent(event.type))
-                .map((event) => (
-                  <div key={`opening-${event.seq}`} className="text-sm leading-relaxed text-white/85">
-                    {event.text}
-                  </div>
-                ))}
+            {playbackError && (
+              <div className="mb-3 rounded-md border border-white/10 bg-white/2 px-2.5 py-2 text-xs text-white/65">
+                {playbackError}
+              </div>
+            )}
+            <div
+              ref={loggerRef}
+              className="flex-1 overflow-y-auto rounded-xl border border-white/10 bg-black/50 p-3"
+            >
+              <div className="space-y-4">
+                {turnLogGroups
+                  .filter((group) => group.turn <= 0)
+                  .flatMap((group) => group.events)
+                  .filter((event) => !isControlEvent(event.type))
+                  .map((event) => (
+                    <div
+                      key={`opening-${event.seq}`}
+                      className="text-sm leading-relaxed text-white/85"
+                    >
+                      {event.text}
+                    </div>
+                  ))}
 
-              {turnLogGroups
-                .filter((group) => group.turn > 0)
-                .map((group) => (
-                  <section key={`turn-${group.turn}`} className="border-t border-white/10 pt-2">
-                    <div className="mb-2 text-xl font-bold text-white">
-                      Turn {group.turn}
-                    </div>
-                    <div className="space-y-1.5">
-                      {group.events
-                        .filter((event) => !isControlEvent(event.type))
-                        .map((event) => (
-                        <div
-                          key={event.seq}
-                          className={`text-sm leading-relaxed ${
-                            awaitingAckEventSeq === event.seq
-                              ? "text-white"
-                              : event.seq <= lastAckedSeq
-                                ? "text-white/85"
-                                : "text-white/60"
-                          }`}
-                        >
-                          <div>
-                            <div>{event.text}</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                ))}
-              {turnLogGroups.length === 0 && (
-                <div className="text-sm text-white/50">No events yet.</div>
-              )}
+                {turnLogGroups
+                  .filter((group) => group.turn > 0)
+                  .map((group) => (
+                    <section
+                      key={`turn-${group.turn}`}
+                      className="border-t border-white/10 pt-2"
+                    >
+                      <div className="mb-2 text-xl font-bold text-white">
+                        Turn {group.turn}
+                      </div>
+                      <div className="space-y-1.5">
+                        {group.events
+                          .filter((event) => !isControlEvent(event.type))
+                          .map((event) => (
+                            <div
+                              key={event.seq}
+                              className={`text-sm leading-relaxed ${
+                                awaitingAckEventSeq === event.seq
+                                  ? "text-white"
+                                  : event.seq <= lastAckedSeq
+                                    ? "text-white/85"
+                                    : "text-white/60"
+                              }`}
+                            >
+                              <div>
+                                <div>{event.text}</div>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    </section>
+                  ))}
+                {turnLogGroups.length === 0 && (
+                  <div className="text-sm text-white/50">No events yet.</div>
+                )}
+              </div>
             </div>
-          </div>
           </div>
 
           <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
-            <div className="text-sm font-medium text-white/70">CPU Analysis</div>
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-medium text-white/70">
+                CPU Analysis
+              </div>
+              <div className="flex items-center gap-2 text-[7px] uppercase tracking-[0.16em] text-white/35">
+                {cpuModelProfile === "reasoning" ? "Reasoning" : "Fast"}
+                {cpuDecisionSummary?.modelId && (
+                  <span className="text-white/25 text-[7px] font-mono text-xs">
+                    {cpuDecisionSummary.modelId}
+                  </span>
+                )}
+              </div>
+            </div>
             <div className="mt-3 flex-1 overflow-y-auto rounded-xl border border-white/10 bg-black/40 p-3">
               {cpuStream.isStreaming ? (
                 <div className="space-y-3">
@@ -2780,22 +2774,26 @@ function BattleArena(params: {
                     </div>
                     <div className="mt-3 space-y-2 text-xs text-white/45">
                       <div>Preparing a structured recommendation.</div>
-                      <div>Raw streamed tokens are hidden until parsing finishes.</div>
+                      <div>
+                        Raw streamed tokens are hidden until parsing finishes.
+                      </div>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+                    <div className="rounded-lg border border-white/10 bg-white/3 px-3 py-2">
                       <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">
                         Source
                       </div>
                       <div className="mt-1 text-xs text-white/80">model</div>
                     </div>
-                    <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+                    <div className="rounded-lg border border-white/10 bg-white/3 px-3 py-2">
                       <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">
                         Status
                       </div>
-                      <div className="mt-1 text-xs text-white/80">Streaming</div>
+                      <div className="mt-1 text-xs text-white/80">
+                        Streaming
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2805,18 +2803,21 @@ function BattleArena(params: {
                     <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-300/70">
                       Analysis complete
                     </div>
-                    <div className="mt-2 text-sm text-white/80">
-                      {hasStructuredCpuSummary
-                        ? "Recommendation parsed. Reasoning below is the source of truth."
-                        : "Structured recommendation unavailable. Showing cleaned reasoning."}
-                    </div>
                   </div>
 
-                  {!hasStructuredCpuSummary && (
+                  {cpuDecisionSummary?.truncated && (
                     <div className="rounded-lg border border-amber-400/15 bg-amber-400/5 px-3 py-2 text-xs text-amber-200/85">
-                      Could not parse structured recommendation cleanly.
+                      Output was truncated. The reasoning model used most of its
+                      token budget on internal chain-of-thought.
                     </div>
                   )}
+
+                  {!hasStructuredCpuSummary &&
+                    !cpuDecisionSummary?.truncated && (
+                      <div className="rounded-lg border border-amber-400/15 bg-amber-400/5 px-3 py-2 text-xs text-amber-200/85">
+                        Could not parse structured recommendation cleanly.
+                      </div>
+                    )}
 
                   {finalCpuReasoning && (
                     <div className="rounded-lg border border-white/10 bg-black/50 p-3">
@@ -2858,7 +2859,9 @@ function BattleArena(params: {
                         Raw model output
                       </summary>
                       <div className="max-h-48 overflow-y-auto border-t border-white/10 px-3 py-2 font-mono text-[11px] leading-relaxed text-white/55">
-                        <pre className="whitespace-pre-wrap">{rawCpuOutput}</pre>
+                        <pre className="whitespace-pre-wrap">
+                          {rawCpuOutput}
+                        </pre>
                       </div>
                     </details>
                   )}
@@ -2915,10 +2918,9 @@ export function InteractiveBattle({
     level: 100,
   });
   const [battleId, setBattleId] = useState<string | null>(initialBattleId);
-  const [activeBattleUi, setActiveBattleUi] =
-    useState<ActiveBattleUiState>(
-      () => readStoredBattleUiPrefs(initialBattleId) ?? DEFAULT_ACTIVE_BATTLE_UI,
-    );
+  const [activeBattleUi, setActiveBattleUi] = useState<ActiveBattleUiState>(
+    () => readStoredBattleUiPrefs(initialBattleId) ?? DEFAULT_ACTIVE_BATTLE_UI,
+  );
   const [battleStateSnapshot, setBattleStateSnapshot] =
     useState<BattleState | null>(null);
   const [moveUiError, setMoveUiError] = useState<string | null>(null);
@@ -2940,7 +2942,9 @@ export function InteractiveBattle({
     p2: number;
   } | null>(null);
   const [isPlaybackRunning, setIsPlaybackRunning] = useState(false);
-  const [animatedStatusText, setAnimatedStatusText] = useState<string | null>(null);
+  const [animatedStatusText, setAnimatedStatusText] = useState<string | null>(
+    null,
+  );
   const [isSubmittingMove, setIsSubmittingMove] = useState(false);
   const isSubmittingMoveRef = useRef(false);
   const isPlaybackBusyRef = useRef(false);
@@ -3053,7 +3057,10 @@ export function InteractiveBattle({
       if (!battleId) return false;
       if (!state) return 1200;
       if (state.isEnded || state.phase === "ended") return false;
-      if (state.awaitingAckEventSeq != null || state.phase === "awaiting-event-ack")
+      if (
+        state.awaitingAckEventSeq != null ||
+        state.phase === "awaiting-event-ack"
+      )
         return 250;
       if (state.phase === "resolving") return 700;
       if (state.phase === "awaiting-forced-switch-p2") return 500;
@@ -3131,7 +3138,9 @@ export function InteractiveBattle({
               ? [
                   {
                     species: setup.p1.selectedPokemon.name,
-                    ...(p1ResolvedAutoMoves ? {} : { moves: p1ResolvedSelectedMoves }),
+                    ...(p1ResolvedAutoMoves
+                      ? {}
+                      : { moves: p1ResolvedSelectedMoves }),
                     level: setup.level,
                   },
                 ]
@@ -3144,7 +3153,9 @@ export function InteractiveBattle({
               ? [
                   {
                     species: setup.p2.selectedPokemon.name,
-                    ...(p2ResolvedAutoMoves ? {} : { moves: p2ResolvedSelectedMoves }),
+                    ...(p2ResolvedAutoMoves
+                      ? {}
+                      : { moves: p2ResolvedSelectedMoves }),
                     level: setup.level,
                   },
                 ]
@@ -3401,10 +3412,12 @@ export function InteractiveBattle({
       if (maxSeeded > 0) setLastSeenSeq((prev) => Math.max(prev, maxSeeded));
       setLastAckedSeq((prev) => {
         const next = Math.max(prev, maxSeeded);
-        for (let seq = 1; seq <= next; seq += 1) processedSeqRef.current.add(seq);
+        for (let seq = 1; seq <= next; seq += 1)
+          processedSeqRef.current.add(seq);
         return next;
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keying on sub-properties to avoid over-firing
   }, [
     liveBattleState?.battleId,
     liveBattleState?.eventCursor,
@@ -3462,7 +3475,9 @@ export function InteractiveBattle({
           return;
         }
 
-        let target = playbackEventsRef.current.find((event) => event.seq === ackSeq);
+        let target = playbackEventsRef.current.find(
+          (event) => event.seq === ackSeq,
+        );
         if (!target) {
           const incoming = await fetchBattleEvents({
             battleId,
@@ -3531,7 +3546,13 @@ export function InteractiveBattle({
     return () => {
       cancelled = true;
     };
-  }, [battleId, liveBattleState, lastSeenSeq, lastAckedSeq, refetchBattleState]);
+  }, [
+    battleId,
+    liveBattleState,
+    lastSeenSeq,
+    lastAckedSeq,
+    refetchBattleState,
+  ]);
 
   const turnLogGroups = useMemo(() => {
     if (playbackEvents.length > 0) {
@@ -3565,12 +3586,15 @@ export function InteractiveBattle({
     return (
       <div className="space-y-6">
         <div className={panelClass}>
-          <div className="text-sm font-medium text-white/70">Loading Battle</div>
+          <div className="text-sm font-medium text-white/70">
+            Loading Battle
+          </div>
           <div className="mt-2 text-sm text-white/55">
-            Restoring battle state for <span className="font-mono">{battleId}</span>...
+            Restoring battle state for{" "}
+            <span className="font-mono">{battleId}</span>...
           </div>
           {stateQuery.error && (
-            <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-sm text-white/65">
+            <div className="mt-4 rounded-lg border border-white/10 bg-white/2 px-3 py-2 text-sm text-white/65">
               {(stateQuery.error as Error).message}
             </div>
           )}
@@ -3578,14 +3602,14 @@ export function InteractiveBattle({
             <button
               type="button"
               onClick={() => stateQuery.refetch()}
-              className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/75 hover:bg-white/[0.06]"
+              className="rounded-lg border border-white/10 bg-white/3 px-3 py-2 text-sm text-white/75 hover:bg-white/6"
             >
               Retry
             </button>
             <button
               type="button"
               onClick={() => router.push("/")}
-              className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/75 hover:bg-white/[0.06]"
+              className="rounded-lg border border-white/10 bg-white/3 px-3 py-2 text-sm text-white/75 hover:bg-white/6"
             >
               Back to Setup
             </button>
@@ -3669,12 +3693,14 @@ export function InteractiveBattle({
       <div className={panelClass}>
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
-            <div className="text-xs tracking-[0.18em] text-white/40">FORMAT</div>
+            <div className="text-xs tracking-[0.18em] text-white/40">
+              FORMAT
+            </div>
             <div className="mt-2 text-sm text-white/55">
               Quick-start defaults let you launch a battle immediately.
             </div>
           </div>
-          <div className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-white/55">
+          <div className="rounded-full border border-white/10 bg-white/4 px-3 py-1 text-xs text-white/55">
             Ready in 1 click
           </div>
         </div>
@@ -3728,7 +3754,9 @@ export function InteractiveBattle({
 
         <div className="mt-4 rounded-xl border border-white/10 bg-black/25 p-4">
           <div className="mb-3">
-            <div className="text-xs tracking-[0.16em] text-white/40">BATTLE TYPE</div>
+            <div className="text-xs tracking-[0.16em] text-white/40">
+              BATTLE TYPE
+            </div>
             <div className="mt-1 text-xs text-white/45">
               {setup.teamSource === "random"
                 ? "Choose the random ladder format to generate teams from."
@@ -3738,7 +3766,9 @@ export function InteractiveBattle({
           <div className="grid gap-3 sm:grid-cols-3">
             <label className="space-y-1.5 sm:col-span-3">
               <span className="text-xs text-white/50">
-                {setup.teamSource === "random" ? "Random battle type" : "Battle type"}
+                {setup.teamSource === "random"
+                  ? "Random battle type"
+                  : "Battle type"}
               </span>
               <select
                 value={
@@ -3774,7 +3804,9 @@ export function InteractiveBattle({
               </div>
             </label>
             <label className="space-y-1.5">
-              <span className="text-xs text-white/50">Random team format ID</span>
+              <span className="text-xs text-white/50">
+                Random team format ID
+              </span>
               <div className="rounded-lg border border-white/10 bg-black/35 px-3 py-2 font-mono text-sm text-white/85">
                 {resolvedFormats.randomTeamFormatid}
               </div>
@@ -3785,7 +3817,9 @@ export function InteractiveBattle({
 
       <div className={panelClass}>
         <div className="mb-4">
-          <div className="text-xs tracking-[0.18em] text-white/40">AI SETTINGS</div>
+          <div className="text-xs tracking-[0.18em] text-white/40">
+            AI SETTINGS
+          </div>
           <div className="mt-2 text-sm text-white/55">
             Coach and CPU defaults are configured for immediate play.
           </div>
@@ -3862,7 +3896,8 @@ export function InteractiveBattle({
               disabled={setup.teamSource !== "random"}
             />
             <div className="text-xs text-white/45">
-              Optional seed for deterministic battles (useful for debugging or reproducing matches).
+              Optional seed for deterministic battles (useful for debugging or
+              reproducing matches).
             </div>
           </label>
         </div>
@@ -3889,7 +3924,10 @@ export function InteractiveBattle({
               <select
                 value={setup.p1SavedTeamId}
                 onChange={(e) =>
-                  setSetup((prev) => ({ ...prev, p1SavedTeamId: e.target.value }))
+                  setSetup((prev) => ({
+                    ...prev,
+                    p1SavedTeamId: e.target.value,
+                  }))
                 }
                 className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
                 disabled={!teamsQuery.data?.length}
@@ -3908,7 +3946,10 @@ export function InteractiveBattle({
               <select
                 value={setup.p2SavedTeamId}
                 onChange={(e) =>
-                  setSetup((prev) => ({ ...prev, p2SavedTeamId: e.target.value }))
+                  setSetup((prev) => ({
+                    ...prev,
+                    p2SavedTeamId: e.target.value,
+                  }))
                 }
                 className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
                 disabled={!teamsQuery.data?.length}
@@ -3922,7 +3963,8 @@ export function InteractiveBattle({
               </select>
             </label>
           </div>
-          {(teamsQuery.error || (!teamsQuery.isFetching && !teamsQuery.data?.length)) && (
+          {(teamsQuery.error ||
+            (!teamsQuery.isFetching && !teamsQuery.data?.length)) && (
             <div className="mt-3 text-xs text-white/45">
               {teamsQuery.error
                 ? (teamsQuery.error as Error).message
@@ -3964,7 +4006,9 @@ export function InteractiveBattle({
             searchResults={p1SearchQuery.data ?? []}
             searchLoading={p1SearchQuery.isFetching}
             searchError={
-              p1SearchQuery.error ? (p1SearchQuery.error as Error).message : null
+              p1SearchQuery.error
+                ? (p1SearchQuery.error as Error).message
+                : null
             }
             details={p1DetailsQuery.data ?? null}
             moves={p1MovesQuery.data?.moves ?? []}
@@ -4002,7 +4046,9 @@ export function InteractiveBattle({
             searchResults={p2SearchQuery.data ?? []}
             searchLoading={p2SearchQuery.isFetching}
             searchError={
-              p2SearchQuery.error ? (p2SearchQuery.error as Error).message : null
+              p2SearchQuery.error
+                ? (p2SearchQuery.error as Error).message
+                : null
             }
             details={p2DetailsQuery.data ?? null}
             moves={p2MovesQuery.data?.moves ?? []}
@@ -4023,16 +4069,19 @@ export function InteractiveBattle({
           ].map(({ label, data }) => (
             <div
               key={label}
-              className="rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.06] to-black/40 p-5"
+              className="rounded-2xl border border-white/10 bg-linear-to-br from-white/6 to-black/40 p-5"
             >
-              <div className="text-xs tracking-[0.16em] text-white/45">{label} Team</div>
+              <div className="text-xs tracking-[0.16em] text-white/45">
+                {label} Team
+              </div>
               <div className="mt-2 text-base font-medium text-white">
                 {setup.teamSource === "random"
                   ? "Auto-generated random team"
                   : setup.teamSource === "saved"
-                    ? (label === "P1" ? selectedP1SavedTeam?.name : selectedP2SavedTeam?.name) ??
-                      "Not selected"
-                    : data.selectedPokemon?.name ?? "Not selected"}
+                    ? ((label === "P1"
+                        ? selectedP1SavedTeam?.name
+                        : selectedP2SavedTeam?.name) ?? "Not selected")
+                    : (data.selectedPokemon?.name ?? "Not selected")}
               </div>
               {setup.teamSource === "saved" && (
                 <div className="mt-1 text-xs text-white/50">
@@ -4059,7 +4108,7 @@ export function InteractiveBattle({
         </div>
 
         {startBattleMutation.error && (
-          <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-sm text-white/65">
+          <div className="mt-4 rounded-lg border border-white/10 bg-white/2 px-3 py-2 text-sm text-white/65">
             {(startBattleMutation.error as Error).message}
           </div>
         )}
@@ -4071,7 +4120,9 @@ export function InteractiveBattle({
             disabled={!setupReady || startBattleMutation.isPending}
             className="rounded-xl border border-white/15 bg-white px-5 py-3 text-sm font-semibold text-black transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {startBattleMutation.isPending ? "Starting battle..." : "Start Battle"}
+            {startBattleMutation.isPending
+              ? "Starting battle..."
+              : "Start Battle"}
           </button>
           {!setupReady && (
             <div className="self-center text-xs text-white/45">
