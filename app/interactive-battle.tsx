@@ -2,6 +2,7 @@
 
 import { useAuth, useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createTeambuilderApiClient } from "@/lib/teambuilder/api-client";
@@ -1656,6 +1657,77 @@ function getSpriteFallbackUrl(name: string): string {
   return `https://play.pokemonshowdown.com/sprites/gen5/${normalizeSpriteName(name)}.png`;
 }
 
+function BattlePokemonSprite({
+  name,
+  alt,
+  className,
+}: {
+  name: string;
+  alt: string;
+  className: string;
+}) {
+  const primarySrc = getSpriteUrl(name);
+  const fallbackSrc = getSpriteFallbackUrl(name);
+  const homeSrc = `https://img.pokemondb.net/sprites/home/normal/${normalizeSpriteName(name)}.png`;
+  const [src, setSrc] = useState(primarySrc);
+
+  useEffect(() => {
+    setSrc(primarySrc);
+  }, [primarySrc]);
+
+  return (
+    <Image
+      src={src}
+      alt={alt}
+      width={80}
+      height={80}
+      unoptimized
+      className={className}
+      onError={() => {
+        if (src !== fallbackSrc) {
+          setSrc(fallbackSrc);
+          return;
+        }
+        if (src !== homeSrc) {
+          setSrc(homeSrc);
+        }
+      }}
+    />
+  );
+}
+
+function OptionalBattleSprite({
+  src,
+  alt,
+  className,
+  width,
+  height,
+}: {
+  src: string;
+  alt: string;
+  className: string;
+  width: number;
+  height: number;
+}) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+
+  if (!src || failedSrc === src) return null;
+
+  return (
+    <Image
+      src={src}
+      alt={alt}
+      width={width}
+      height={height}
+      unoptimized
+      className={className}
+      onError={() => {
+        setFailedSrc(src);
+      }}
+    />
+  );
+}
+
 function formatItemName(item: string | null | undefined): string | null {
   if (!item) return null;
   const trimmed = item.trim();
@@ -2534,19 +2606,10 @@ function BattleArena(params: {
                         Switching...
                       </div>
                     ) : (
-                      <img
-                        src={getSpriteUrl(p.name)}
+                      <BattlePokemonSprite
+                        name={p.name}
                         alt={p.name}
                         className="h-20 w-20 object-contain"
-                        onError={(e) => {
-                          const el = e.currentTarget;
-                          const fallback1 = getSpriteFallbackUrl(p.name);
-                          if (el.src !== fallback1) {
-                            el.src = fallback1;
-                            return;
-                          }
-                          el.src = `https://img.pokemondb.net/sprites/home/normal/${normalizeSpriteName(p.name)}.png`;
-                        }}
                       />
                     )}
                     <div className="min-w-0 flex-1 space-y-1.5">
@@ -2786,13 +2849,12 @@ function BattleArena(params: {
                             className="rounded-xl border border-white/10 bg-white/2 px-4 py-3 text-left transition-colors hover:border-white/20 hover:bg-white/4 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <div className="flex items-center gap-2">
-                              <img
+                              <OptionalBattleSprite
                                 src={getSpriteFallbackUrl(option.name)}
                                 alt={option.name}
+                                width={32}
+                                height={32}
                                 className="h-8 w-8 object-contain"
-                                onError={(e) => {
-                                  e.currentTarget.style.display = "none";
-                                }}
                               />
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-1.5 text-sm font-medium tracking-tight text-white">

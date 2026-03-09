@@ -12,7 +12,8 @@ import {
   type PokemonSlot,
   type Team,
 } from "@/lib/teambuilder/types";
-import { useState } from "react";
+import Image from "next/image";
+import { useEffect, useState } from "react";
 
 interface TeamEditorProps {
   team: Team | null;
@@ -44,6 +45,13 @@ function SlotTab({
   const sprite =
     getPokemonSpriteUrl(slot.species) ??
     getPokemonFallbackSpriteUrl(slot.species);
+  const [spriteVisible, setSpriteVisible] = useState(true);
+
+  useEffect(() => {
+    setSpriteVisible(true);
+  }, [sprite]);
+
+  const displaySprite = sprite && spriteVisible;
   return (
     <button
       type="button"
@@ -55,13 +63,16 @@ function SlotTab({
       }`}
     >
       <div className="flex h-10 w-10 items-center justify-center rounded-md border border-white/10 bg-black/40">
-        {sprite ? (
-          <img
+        {displaySprite ? (
+          <Image
             src={sprite}
             alt={slot.species || `Slot ${index + 1}`}
+            width={32}
+            height={32}
+            unoptimized
             className="h-8 w-8 object-contain"
-            onError={(e) => {
-              e.currentTarget.style.display = "none";
+            onError={() => {
+              setSpriteVisible(false);
             }}
           />
         ) : (
