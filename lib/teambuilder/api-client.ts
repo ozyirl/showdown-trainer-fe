@@ -1,5 +1,15 @@
-import type { Team, TeamCreateInput, TeamPatchInput, ApiErrorPayload } from "@/lib/teambuilder/types";
+import type { Team, TeamCreateInput, TeamPatchInput, PokemonSlot, ApiErrorPayload } from "@/lib/teambuilder/types";
 import { coerceTeamListResponse, normalizeTeam, sanitizeTeamForSave } from "@/lib/teambuilder/types";
+
+export type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type ChatResponse = {
+  message: string;
+  slotUpdates: PokemonSlot[];
+};
 
 export type TokenGetter = () => Promise<string | null>;
 
@@ -98,6 +108,17 @@ export function createTeambuilderApiClient(getToken: TokenGetter) {
     },
     async deleteTeam(id: string): Promise<void> {
       await request<unknown>(`/teams/${id}`, { method: "DELETE" });
+    },
+    async chat(params: {
+      messages: ChatMessage[];
+      currentSlots?: PokemonSlot[];
+      format?: string;
+    }): Promise<ChatResponse> {
+      const data = await request<ChatResponse>("/teams/chat", {
+        method: "POST",
+        body: JSON.stringify(params),
+      });
+      return data;
     },
   };
 }

@@ -5,8 +5,12 @@ import Link from "next/link";
 import { useAuth, UserButton } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TeamEditor } from "@/components/teambuilder/TeamEditor";
+import { TeambuilderChat } from "@/components/teambuilder/TeambuilderChat";
 import { TeamList } from "@/components/teambuilder/TeamList";
-import { createTeambuilderApiClient, ApiClientError } from "@/lib/teambuilder/api-client";
+import {
+  createTeambuilderApiClient,
+  ApiClientError,
+} from "@/lib/teambuilder/api-client";
 import {
   createEmptySlot,
   createEmptyTeam,
@@ -29,15 +33,23 @@ function statusFromError(error: unknown): string {
 export default function TeambuilderClient() {
   const { getToken, isLoaded, userId } = useAuth();
   const queryClient = useQueryClient();
-  const api = useMemo(() => createTeambuilderApiClient(() => getToken()), [getToken]);
+  const api = useMemo(
+    () => createTeambuilderApiClient(() => getToken()),
+    [getToken],
+  );
 
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [selectedSlotIndex, setSelectedSlotIndex] = useState(0);
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState<Team | null>(null);
   const [isDirty, setIsDirty] = useState(false);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [statusBanner, setStatusBanner] = useState<{ type: "error" | "success" | "info"; text: string } | null>(null);
+  const [saveState, setSaveState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const [statusBanner, setStatusBanner] = useState<{
+    type: "error" | "success" | "info";
+    text: string;
+  } | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
   const editVersionRef = useRef(0);
@@ -68,13 +80,19 @@ export default function TeambuilderClient() {
     const sourceId = `${team.id}:${team.updatedAt ?? ""}`;
     if (hydratedTeamRef.current === sourceId && isDirty) return;
 
-    const fallback = typeof window !== "undefined" ? localStorage.getItem(localDraftKey(team.id)) : null;
+    const fallback =
+      typeof window !== "undefined"
+        ? localStorage.getItem(localDraftKey(team.id))
+        : null;
     if (fallback) {
       try {
         const parsed = JSON.parse(fallback) as Team;
         setDraft(normalizeTeam(parsed));
         setIsDirty(true);
-        setStatusBanner({ type: "info", text: "Recovered local draft after a previous save failure." });
+        setStatusBanner({
+          type: "info",
+          text: "Recovered local draft after a previous save failure.",
+        });
       } catch {
         setDraft(team);
         setIsDirty(false);
@@ -114,7 +132,10 @@ export default function TeambuilderClient() {
     autosaveTimerRef.current = window.setTimeout(async () => {
       try {
         setSaveState("saving");
-        const saved = await patchMutation.mutateAsync({ id: draft.id, team: draft });
+        const saved = await patchMutation.mutateAsync({
+          id: draft.id,
+          team: draft,
+        });
         queryClient.setQueryData(["teambuilder", "team", saved.id], saved);
         queryClient.setQueryData<Team[] | undefined>(TEAMS_KEY, (prev) =>
           (prev ?? []).map((team) => (team.id === saved.id ? saved : team)),
@@ -135,13 +156,17 @@ export default function TeambuilderClient() {
           });
         } else {
           setSaveState("error");
-          setStatusBanner({ type: "error", text: `Autosave failed: ${statusFromError(error)}` });
+          setStatusBanner({
+            type: "error",
+            text: `Autosave failed: ${statusFromError(error)}`,
+          });
         }
       }
     }, 900);
 
     return () => {
-      if (autosaveTimerRef.current) window.clearTimeout(autosaveTimerRef.current);
+      if (autosaveTimerRef.current)
+        window.clearTimeout(autosaveTimerRef.current);
     };
   }, [draft, isDirty, patchMutation, queryClient, api]);
 
@@ -155,7 +180,10 @@ export default function TeambuilderClient() {
         notes: "",
         slots: [createEmptySlot()],
       });
-      queryClient.setQueryData<Team[] | undefined>(TEAMS_KEY, (prev) => [created, ...(prev ?? [])]);
+      queryClient.setQueryData<Team[] | undefined>(TEAMS_KEY, (prev) => [
+        created,
+        ...(prev ?? []),
+      ]);
       queryClient.setQueryData(["teambuilder", "team", created.id], created);
       setSelectedTeamId(created.id);
       setSelectedSlotIndex(0);
@@ -164,7 +192,10 @@ export default function TeambuilderClient() {
       setSaveState("saved");
       setStatusBanner({ type: "success", text: "Team created." });
     } catch (error) {
-      setStatusBanner({ type: "error", text: `Create failed: ${statusFromError(error)}` });
+      setStatusBanner({
+        type: "error",
+        text: `Create failed: ${statusFromError(error)}`,
+      });
     } finally {
       setBusyAction(null);
     }
@@ -172,7 +203,8 @@ export default function TeambuilderClient() {
 
   const deleteTeam = async () => {
     if (!selectedTeamId) return;
-    if (typeof window !== "undefined" && !window.confirm("Delete this team?")) return;
+    if (typeof window !== "undefined" && !window.confirm("Delete this team?"))
+      return;
     setBusyAction("delete");
     setStatusBanner(null);
     try {
@@ -181,16 +213,23 @@ export default function TeambuilderClient() {
       queryClient.setQueryData<Team[] | undefined>(TEAMS_KEY, (prev) =>
         (prev ?? []).filter((team) => team.id !== deletingId),
       );
-      queryClient.removeQueries({ queryKey: ["teambuilder", "team", deletingId] });
+      queryClient.removeQueries({
+        queryKey: ["teambuilder", "team", deletingId],
+      });
       if (draft?.id === deletingId) {
         setDraft(null);
         setIsDirty(false);
       }
-      const remaining = (queryClient.getQueryData<Team[]>(TEAMS_KEY) ?? []).filter((t) => t.id !== deletingId);
+      const remaining = (
+        queryClient.getQueryData<Team[]>(TEAMS_KEY) ?? []
+      ).filter((t) => t.id !== deletingId);
       setSelectedTeamId(remaining[0]?.id ?? null);
       setStatusBanner({ type: "success", text: "Team deleted." });
     } catch (error) {
-      setStatusBanner({ type: "error", text: `Delete failed: ${statusFromError(error)}` });
+      setStatusBanner({
+        type: "error",
+        text: `Delete failed: ${statusFromError(error)}`,
+      });
     } finally {
       setBusyAction(null);
     }
@@ -207,7 +246,10 @@ export default function TeambuilderClient() {
         notes: draft.notes,
         slots: draft.slots,
       });
-      queryClient.setQueryData<Team[] | undefined>(TEAMS_KEY, (prev) => [copy, ...(prev ?? [])]);
+      queryClient.setQueryData<Team[] | undefined>(TEAMS_KEY, (prev) => [
+        copy,
+        ...(prev ?? []),
+      ]);
       queryClient.setQueryData(["teambuilder", "team", copy.id], copy);
       setSelectedTeamId(copy.id);
       setSelectedSlotIndex(0);
@@ -215,7 +257,10 @@ export default function TeambuilderClient() {
       setIsDirty(false);
       setStatusBanner({ type: "success", text: "Team duplicated." });
     } catch (error) {
-      setStatusBanner({ type: "error", text: `Duplicate failed: ${statusFromError(error)}` });
+      setStatusBanner({
+        type: "error",
+        text: `Duplicate failed: ${statusFromError(error)}`,
+      });
     } finally {
       setBusyAction(null);
     }
@@ -234,6 +279,43 @@ export default function TeambuilderClient() {
     setSelectedSlotIndex(draft.slots.length);
   };
 
+  const handleChatSlotsUpdated = (
+    incomingSlots: typeof draft extends null
+      ? never
+      : NonNullable<typeof draft>["slots"],
+  ) => {
+    if (!draft) return;
+    const nextSlots = [...draft.slots];
+    for (const incoming of incomingSlots) {
+      const slotNum = (incoming as { slot?: number }).slot;
+      const targetIdx =
+        typeof slotNum === "number" && slotNum >= 1 && slotNum <= 6
+          ? slotNum - 1
+          : nextSlots.length < 6
+            ? nextSlots.length
+            : nextSlots.findIndex((s) => !s.species.trim());
+      if (targetIdx < 0 || targetIdx >= 6) continue;
+      while (nextSlots.length <= targetIdx) nextSlots.push(createEmptySlot());
+      nextSlots[targetIdx] = {
+        ...incoming,
+        species: incoming.species || nextSlots[targetIdx].species,
+      };
+    }
+    handleTeamChange({ ...draft, slots: nextSlots.slice(0, 6) });
+    if (incomingSlots.length > 0) {
+      const lastSlotNum = (
+        incomingSlots[incomingSlots.length - 1] as { slot?: number }
+      ).slot;
+      if (
+        typeof lastSlotNum === "number" &&
+        lastSlotNum >= 1 &&
+        lastSlotNum <= 6
+      ) {
+        setSelectedSlotIndex(lastSlotNum - 1);
+      }
+    }
+  };
+
   const headerStatus = (() => {
     if (selectedTeamQuery.isFetching && !draft) return "Loading team...";
     if (saveState === "saving") return "Autosaving changes";
@@ -248,55 +330,51 @@ export default function TeambuilderClient() {
     <div className="min-h-screen bg-black text-white">
       <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_18%_12%,rgba(0,21,255,0.16),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(0,21,255,0.12),transparent_46%),radial-gradient(circle_at_50%_85%,rgba(0,21,255,0.07),transparent_44%)]" />
       <div className="mx-auto max-w-[1680px] px-4 py-5 sm:px-6 lg:px-8">
-        <header className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 backdrop-blur">
+        <header className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/3 px-4 py-3 backdrop-blur">
           <div className="flex items-center gap-3">
-            <Link href="/" className="rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white/70 hover:bg-white/[0.03]">
+            <Link
+              href="/"
+              className="rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white/70 hover:bg-white/[0.03]"
+            >
               ← Home
             </Link>
             <div>
-              <div className="text-xs tracking-[0.18em] text-white/40">POKEMON SHOWDOWN-STYLE TEAMBUILDER</div>
-              <div className="text-sm text-white/70">Compact editor • Clerk auth • Nest API</div>
+              <div className="text-xs tracking-[0.18em] text-white/40">
+                POKEMON SHOWDOWN-STYLE TEAMBUILDER
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <div className={`rounded-full border px-3 py-1 text-xs ${isDirty ? "border-amber-300/30 text-amber-200" : "border-white/10 text-white/60"}`}>
-              {headerStatus}
-            </div>
             <UserButton afterSignOutUrl="/" />
           </div>
         </header>
 
-        {statusBanner && (
-          <div
-            className={`mb-4 rounded-xl border px-3 py-2 text-sm ${
-              statusBanner.type === "error"
-                ? "border-red-400/20 bg-red-500/5 text-red-200"
-                : statusBanner.type === "success"
-                ? "border-emerald-400/20 bg-emerald-500/5 text-emerald-200"
-                : "border-white/10 bg-white/[0.03] text-white/70"
-            }`}
-          >
-            {statusBanner.text}
+        <div className="grid gap-4 xl:grid-cols-[400px_1fr]">
+          <div className="flex flex-col gap-4">
+            <TeamList
+              teams={teams}
+              selectedTeamId={selectedTeamId}
+              search={search}
+              onSearchChange={setSearch}
+              onSelect={(id) => {
+                setSelectedTeamId(id);
+                setSelectedSlotIndex(0);
+                setStatusBanner(null);
+              }}
+              onCreate={createTeam}
+              onDuplicate={duplicateTeam}
+              onDelete={deleteTeam}
+              loading={teamsQuery.isLoading}
+              busyAction={busyAction}
+            />
+            <div className="h-[520px]">
+              <TeambuilderChat
+                team={draft}
+                onSlotsUpdated={handleChatSlotsUpdated}
+                chatFn={(params) => api.chat(params)}
+              />
+            </div>
           </div>
-        )}
-
-        <div className="grid gap-4 xl:grid-cols-[340px_1fr]">
-          <TeamList
-            teams={teams}
-            selectedTeamId={selectedTeamId}
-            search={search}
-            onSearchChange={setSearch}
-            onSelect={(id) => {
-              setSelectedTeamId(id);
-              setSelectedSlotIndex(0);
-              setStatusBanner(null);
-            }}
-            onCreate={createTeam}
-            onDuplicate={duplicateTeam}
-            onDelete={deleteTeam}
-            loading={teamsQuery.isLoading}
-            busyAction={busyAction}
-          />
 
           <div className="space-y-4">
             {(teamsQuery.isError || selectedTeamQuery.isError) && (
@@ -313,7 +391,11 @@ export default function TeambuilderClient() {
               onSelectSlot={setSelectedSlotIndex}
               onTeamChange={handleTeamChange}
               onAddSlot={handleAddSlot}
-              statusText={selectedTeamId ? `Editing team ${selectedTeamId}` : "No team selected"}
+              statusText={
+                selectedTeamId
+                  ? `Editing team ${selectedTeamId}`
+                  : "No team selected"
+              }
               saveState={saveState}
             />
           </div>

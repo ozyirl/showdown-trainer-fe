@@ -203,7 +203,7 @@ export function TeamEditor({
           <div className="text-xs tracking-[0.16em] text-white/40">STATUS</div>
           <div className="mt-1 text-white/70">
             {statusText ?? "Ready"}
-            {saveState === "saving" && " • Autosaving..."}
+
             {saveState === "saved" && " • Saved"}
             {saveState === "error" && " • Save failed"}
           </div>
