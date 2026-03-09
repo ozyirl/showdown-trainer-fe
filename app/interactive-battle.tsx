@@ -7,7 +7,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createTeambuilderApiClient } from "@/lib/teambuilder/api-client";
 import type { Team } from "@/lib/teambuilder/types";
 
-const API_URL = "http://localhost:5200/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5200/api";
+
 const SEARCH_DEBOUNCE_MS = 300;
 const ACTION_DELAY_MS = 450;
 
@@ -2131,15 +2132,15 @@ function AiDecisionBlock({
 
   const borderColor =
     color === "blue" ? "border-blue-400/15" : "border-rose-400/15";
-  const bgColor =
-    color === "blue" ? "bg-blue-400/5" : "bg-rose-400/5";
-  const textColor =
-    color === "blue" ? "text-blue-300/70" : "text-rose-300/70";
+  const bgColor = color === "blue" ? "bg-blue-400/5" : "bg-rose-400/5";
+  const textColor = color === "blue" ? "text-blue-300/70" : "text-rose-300/70";
 
   return (
     <div className={`rounded-xl border ${borderColor} ${bgColor} p-3`}>
       <div className="flex items-center justify-between">
-        <div className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${textColor}`}>
+        <div
+          className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${textColor}`}
+        >
           {label}
         </div>
         {decision?.modelId && (
@@ -2213,8 +2214,11 @@ function AiVsAiSpectatorPanel({
 }) {
   const [autoRun, setAutoRun] = useState(false);
   const autoRunRef = useRef(false);
-  autoRunRef.current = autoRun;
   const lastAutoRunAt = useRef(0);
+
+  useEffect(() => {
+    autoRunRef.current = autoRun;
+  }, [autoRun]);
 
   const canRunTurn =
     !continuePending &&
@@ -2233,9 +2237,11 @@ function AiVsAiSpectatorPanel({
     return () => clearTimeout(timer);
   }, [autoRun, canRunTurn, battleState.isEnded, onContinue]);
 
-  useEffect(() => {
+  const [prevIsEnded, setPrevIsEnded] = useState(battleState.isEnded);
+  if (battleState.isEnded !== prevIsEnded) {
+    setPrevIsEnded(battleState.isEnded);
     if (battleState.isEnded) setAutoRun(false);
-  }, [battleState.isEnded]);
+  }
 
   return (
     <div className="rounded-2xl border border-white/10 bg-white/2 p-5 backdrop-blur-sm">
