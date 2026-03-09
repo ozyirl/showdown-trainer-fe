@@ -113,7 +113,9 @@ type BattleState = {
     error?: string;
     truncated?: boolean;
   } | null;
+  lastP1AiDecision?: BattleState["lastCpuDecision"];
   lastAction?: string | MoveAcceptedAction | null;
+  gameMode?: GameMode;
 };
 
 type CpuStreamDecisionSummary = {
@@ -240,6 +242,7 @@ type SideSetup = {
 type TeamSourceMode = "random" | "saved" | "manual";
 type CopilotMode = "off" | "coach" | "deep";
 type CpuModelProfile = "fast" | "reasoning";
+type GameMode = "pvp" | "ai-vs-ai";
 type GenerationKey =
   | "gen1"
   | "gen2"
@@ -258,6 +261,7 @@ type BattleSetupState = {
   standardBattleType: string;
   copilotMode: CopilotMode;
   cpuModelProfile: CpuModelProfile;
+  gameMode: GameMode;
   p1SavedTeamId: string;
   p2SavedTeamId: string;
   randomSeedInput: string;
@@ -270,12 +274,14 @@ type ActiveBattleUiState = {
   copilotEnabled: boolean;
   copilotMode: CopilotMode;
   cpuModelProfile: CpuModelProfile;
+  gameMode: GameMode;
 };
 
 const DEFAULT_ACTIVE_BATTLE_UI: ActiveBattleUiState = {
   copilotEnabled: false,
   copilotMode: "off",
   cpuModelProfile: "fast",
+  gameMode: "pvp",
 };
 
 type FormatOption = {
@@ -437,6 +443,7 @@ function readStoredBattleUiPrefs(
       copilotEnabled: parsed.copilotEnabled,
       copilotMode: parsed.copilotMode,
       cpuModelProfile: parsed.cpuModelProfile,
+      gameMode: parsed.gameMode === "ai-vs-ai" ? "ai-vs-ai" : "pvp",
     };
   } catch {
     return null;
@@ -2108,6 +2115,171 @@ function CopilotLoadingCard() {
   );
 }
 
+function AiDecisionBlock({
+  label,
+  decision,
+  reasoning,
+  color,
+}: {
+  label: string;
+  decision: BattleState["lastCpuDecision"] | undefined | null;
+  reasoning: string | null | undefined;
+  color: "blue" | "rose";
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (!decision && !reasoning) return null;
+
+  const borderColor =
+    color === "blue" ? "border-blue-400/15" : "border-rose-400/15";
+  const bgColor =
+    color === "blue" ? "bg-blue-400/5" : "bg-rose-400/5";
+  const textColor =
+    color === "blue" ? "text-blue-300/70" : "text-rose-300/70";
+
+  return (
+    <div className={`rounded-xl border ${borderColor} ${bgColor} p-3`}>
+      <div className="flex items-center justify-between">
+        <div className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${textColor}`}>
+          {label}
+        </div>
+        {decision?.modelId && (
+          <span className="font-mono text-[9px] text-white/25">
+            {decision.modelId}
+          </span>
+        )}
+      </div>
+      {decision?.choice && (
+        <div className="mt-1.5 text-xs text-white/80">
+          Choice: <span className="font-medium">{decision.choice}</span>
+          {decision.source === "fallback" && (
+            <span className="ml-1.5 text-amber-300/60">(fallback)</span>
+          )}
+          {decision.truncated && (
+            <span className="ml-1.5 text-amber-300/60">(truncated)</span>
+          )}
+        </div>
+      )}
+      {reasoning && (
+        <div className="mt-2">
+          <div
+            className="whitespace-pre-wrap text-xs leading-relaxed text-white/65"
+            style={
+              expanded
+                ? undefined
+                : {
+                    display: "-webkit-box",
+                    WebkitLineClamp: 3,
+                    WebkitBoxOrient: "vertical",
+                    overflow: "hidden",
+                  }
+            }
+          >
+            {reasoning}
+          </div>
+          {reasoning.length > 180 && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="mt-1 text-[11px] text-white/50 hover:text-white/75"
+            >
+              {expanded ? "Show less" : "Show more"}
+            </button>
+          )}
+        </div>
+      )}
+      {decision?.latencyMs != null && (
+        <div className="mt-1.5 text-[10px] text-white/30">
+          {decision.latencyMs}ms
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AiVsAiSpectatorPanel({
+  onContinue,
+  continuePending,
+  isPlaybackRunning,
+  awaitingAckEventSeq,
+  statusText,
+  battleState,
+}: {
+  onContinue: () => void;
+  continuePending: boolean;
+  isPlaybackRunning: boolean;
+  awaitingAckEventSeq: number | null;
+  statusText: string;
+  battleState: BattleState;
+}) {
+  const [autoRun, setAutoRun] = useState(false);
+  const autoRunRef = useRef(false);
+  autoRunRef.current = autoRun;
+  const lastAutoRunAt = useRef(0);
+
+  const canRunTurn =
+    !continuePending &&
+    !isPlaybackRunning &&
+    awaitingAckEventSeq == null &&
+    !battleState.isEnded;
+
+  useEffect(() => {
+    if (!autoRun || !canRunTurn || battleState.isEnded) return;
+    const delay = Math.max(0, 1500 - (Date.now() - lastAutoRunAt.current));
+    const timer = setTimeout(() => {
+      if (!autoRunRef.current) return;
+      lastAutoRunAt.current = Date.now();
+      onContinue();
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [autoRun, canRunTurn, battleState.isEnded, onContinue]);
+
+  useEffect(() => {
+    if (battleState.isEnded) setAutoRun(false);
+  }, [battleState.isEnded]);
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/2 p-5 backdrop-blur-sm">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h3 className="text-sm font-medium tracking-wide text-white/70">
+          AI vs AI — Spectator Mode
+        </h3>
+        <div className="text-xs text-white/45">
+          {battleState.isEnded
+            ? "Battle ended"
+            : isPlaybackRunning
+              ? "Playing..."
+              : continuePending
+                ? "Thinking..."
+                : "Ready"}
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={onContinue}
+          disabled={!canRunTurn}
+          className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/8 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {continuePending ? "Running..." : "Run Turn"}
+        </button>
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-white/60">
+          <input
+            type="checkbox"
+            checked={autoRun}
+            onChange={(e) => setAutoRun(e.target.checked)}
+            disabled={battleState.isEnded}
+            className="accent-blue-500"
+          />
+          Auto-run
+        </label>
+      </div>
+      <div className="mt-4 rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/70">
+        {statusText}
+      </div>
+    </div>
+  );
+}
+
 function BattleArena(params: {
   battleState: BattleState;
   cpuStream: CpuStreamState;
@@ -2127,6 +2299,7 @@ function BattleArena(params: {
   copilotEnabled: boolean;
   copilotMode: CopilotMode;
   cpuModelProfile: CpuModelProfile;
+  gameMode: GameMode;
   copilotHistory: CopilotHistoryEntry[];
   copilotLoading: boolean;
   onToggleTurnCollapse: (turn: number) => void;
@@ -2157,6 +2330,7 @@ function BattleArena(params: {
     copilotEnabled,
     copilotMode,
     cpuModelProfile,
+    gameMode,
     copilotHistory,
     copilotLoading,
     onSubmitAction,
@@ -2239,6 +2413,13 @@ function BattleArena(params: {
     cpuDecisionSummary?.moveIndex ||
     cpuDecisionSummary?.actionType,
   );
+
+  const isAiVsAi = gameMode === "ai-vs-ai";
+  const p1AiDecision = battleState.lastP1AiDecision;
+  const p1AiReasoning = extractCpuReasoningText(p1AiDecision);
+  const filteredP1AiReasoning = isGenericFallback(p1AiReasoning)
+    ? null
+    : p1AiReasoning;
 
   return (
     <div className="space-y-4">
@@ -2464,7 +2645,18 @@ function BattleArena(params: {
             })}
           </div>
 
-          {!battleState.isEnded && (
+          {!battleState.isEnded && gameMode === "ai-vs-ai" && (
+            <AiVsAiSpectatorPanel
+              onContinue={onContinue}
+              continuePending={continuePending}
+              isPlaybackRunning={isPlaybackRunning}
+              awaitingAckEventSeq={awaitingAckEventSeq}
+              statusText={statusText}
+              battleState={battleState}
+            />
+          )}
+
+          {!battleState.isEnded && gameMode !== "ai-vs-ai" && (
             <div className={panelClass}>
               <div className="mb-4 flex items-center justify-between gap-3">
                 <h3 className="text-sm font-medium tracking-wide text-white/70">
@@ -2750,7 +2942,7 @@ function BattleArena(params: {
           <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
             <div className="flex items-center justify-between">
               <div className="text-sm font-medium text-white/70">
-                CPU Analysis
+                {isAiVsAi ? "AI Analysis" : "CPU Analysis"}
               </div>
               <div className="flex items-center gap-2 text-[7px] uppercase tracking-[0.16em] text-white/35">
                 {cpuModelProfile === "reasoning" ? "Reasoning" : "Fast"}
@@ -2762,7 +2954,27 @@ function BattleArena(params: {
               </div>
             </div>
             <div className="mt-3 flex-1 overflow-y-auto rounded-xl border border-white/10 bg-black/40 p-3">
-              {cpuStream.isStreaming ? (
+              {isAiVsAi ? (
+                <div className="space-y-4">
+                  <AiDecisionBlock
+                    label="P1 (AI)"
+                    decision={p1AiDecision}
+                    reasoning={filteredP1AiReasoning}
+                    color="blue"
+                  />
+                  <AiDecisionBlock
+                    label="P2 (AI)"
+                    decision={cpuDecisionSummary}
+                    reasoning={finalCpuReasoning}
+                    color="rose"
+                  />
+                  {!p1AiDecision && !cpuDecisionSummary && (
+                    <div className="text-xs text-white/40">
+                      Run a turn to see AI decisions.
+                    </div>
+                  )}
+                </div>
+              ) : cpuStream.isStreaming ? (
                 <div className="space-y-3">
                   <div className="rounded-xl border border-blue-400/15 bg-blue-400/5 p-3">
                     <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-blue-300/70">
@@ -2900,6 +3112,7 @@ export function InteractiveBattle({
     standardBattleType: "ou",
     copilotMode: "coach",
     cpuModelProfile: "fast",
+    gameMode: "pvp",
     p1SavedTeamId: "",
     p2SavedTeamId: "",
     randomSeedInput: "",
@@ -3130,6 +3343,7 @@ export function InteractiveBattle({
         copilotEnabled: setup.copilotMode !== "off",
         copilotMode: setup.copilotMode,
         cpuModelProfile: setup.cpuModelProfile,
+        gameMode: setup.gameMode,
         p1Team: usingRandomTeams
           ? []
           : setup.teamSource === "saved"
@@ -3182,6 +3396,7 @@ export function InteractiveBattle({
         copilotEnabled: setup.copilotMode !== "off",
         copilotMode: setup.copilotMode,
         cpuModelProfile: setup.cpuModelProfile,
+        gameMode: setup.gameMode,
       } satisfies ActiveBattleUiState;
       writeStoredBattleUiPrefs(state.battleId, nextBattleUi);
       setActiveBattleUi(nextBattleUi);
@@ -3434,11 +3649,13 @@ export function InteractiveBattle({
     const runPlaybackTick = async () => {
       isPlaybackBusyRef.current = true;
       try {
-        if (
-          liveBattleState.phase === "awaiting-forced-switch-p2" &&
+        const isAiVsAi = activeBattleUi.gameMode === "ai-vs-ai";
+        const autoForcedSwitch =
           liveBattleState.awaitingAckEventSeq == null &&
-          !sideNeedsMove(liveBattleState, "p1")
-        ) {
+          (liveBattleState.phase === "awaiting-forced-switch-p2" ||
+            (isAiVsAi &&
+              liveBattleState.phase === "awaiting-forced-switch-p1"));
+        if (autoForcedSwitch && !sideNeedsMove(liveBattleState, "p1")) {
           if (Date.now() - lastContinueAtRef.current > 1200) {
             lastContinueAtRef.current = Date.now();
             await postBattleContinue({ battleId });
@@ -3640,6 +3857,7 @@ export function InteractiveBattle({
         copilotEnabled={copilotEnabled}
         copilotMode={activeBattleUi.copilotMode}
         cpuModelProfile={activeBattleUi.cpuModelProfile}
+        gameMode={activeBattleUi.gameMode}
         copilotHistory={copilot.history}
         copilotLoading={copilot.isLoading}
         onToggleTurnCollapse={toggleTurnCollapse}
@@ -3824,18 +4042,51 @@ export function InteractiveBattle({
             Coach and CPU defaults are configured for immediate play.
           </div>
         </div>
+        <div className="mb-3">
+          <span className="mb-1.5 block text-xs text-white/50">Game mode</span>
+          <div className="flex gap-2">
+            {(
+              [
+                { value: "pvp", label: "Player vs CPU" },
+                { value: "ai-vs-ai", label: "AI vs AI" },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() =>
+                  setSetup((prev) => ({
+                    ...prev,
+                    gameMode: opt.value,
+                    ...(opt.value === "ai-vs-ai"
+                      ? { copilotMode: "off" as const }
+                      : {}),
+                  }))
+                }
+                className={`rounded-lg border px-4 py-2 text-sm transition ${
+                  setup.gameMode === opt.value
+                    ? "border-white/30 bg-white/10 text-white"
+                    : "border-white/10 bg-black/40 text-white/50 hover:text-white/70"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="space-y-1.5">
             <span className="text-xs text-white/50">Co-pilot mode</span>
             <select
-              value={setup.copilotMode}
+              value={setup.gameMode === "ai-vs-ai" ? "off" : setup.copilotMode}
               onChange={(e) =>
                 setSetup((prev) => ({
                   ...prev,
                   copilotMode: e.target.value as CopilotMode,
                 }))
               }
-              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
+              disabled={setup.gameMode === "ai-vs-ai"}
+              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20 disabled:opacity-40"
             >
               {COPILOT_MODE_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
