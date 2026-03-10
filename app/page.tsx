@@ -1,8 +1,9 @@
 "use client";
 
 import { UserButton } from "@clerk/nextjs";
+import Image from "next/image";
 import Link from "next/link";
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import TextCursorProximity from "@/components/fancy/text/text-cursor-proximity";
 import ScrambleHover from "@/components/fancy/text/scramble-hover";
 import PixelTrail from "@/components/fancy/background/pixel-trail";
@@ -60,6 +61,40 @@ function spriteGif(name: string) {
 
 function spritePng(name: string) {
   return `https://play.pokemonshowdown.com/sprites/gen5/${name.toLowerCase()}.png`;
+}
+
+function PokemonSprite({
+  name,
+  className,
+  width,
+  height,
+}: {
+  name: string;
+  className: string;
+  width: number;
+  height: number;
+}) {
+  const gifSrc = spriteGif(name);
+  const pngSrc = spritePng(name);
+  const [src, setSrc] = useState(gifSrc);
+
+  useEffect(() => {
+    setSrc(gifSrc);
+  }, [gifSrc]);
+
+  return (
+    <Image
+      src={src}
+      alt={name}
+      width={width}
+      height={height}
+      unoptimized
+      className={className}
+      onError={() => {
+        if (src !== pngSrc) setSrc(pngSrc);
+      }}
+    />
+  );
 }
 
 function TypeChip({ type }: { type: string }) {
@@ -202,13 +237,11 @@ export default function Home() {
                   amplitude={[8, 15, 10]}
                   rotationRange={[5, 8, 3]}
                 >
-                  <img
-                    src={spriteGif(POKEMON[0].name)}
-                    alt={POKEMON[0].name}
+                  <PokemonSprite
+                    name={POKEMON[0].name}
+                    width={192}
+                    height={192}
                     className="h-36 w-36 object-contain drop-shadow-[0_0_40px_rgba(255,120,0,0.3)] lg:h-48 lg:w-48"
-                    onError={(e) => {
-                      e.currentTarget.src = spritePng(POKEMON[0].name);
-                    }}
                   />
                 </Float>
               </div>
@@ -268,13 +301,11 @@ export default function Home() {
                     rotationRange={[4, 6, 2]}
                     timeOffset={2}
                   >
-                    <img
-                      src={spriteGif(POKEMON[3].name)}
-                      alt={POKEMON[3].name}
+                    <PokemonSprite
+                      name={POKEMON[3].name}
+                      width={144}
+                      height={144}
                       className="h-28 w-28 object-contain drop-shadow-[0_0_25px_rgba(100,100,255,0.2)] lg:h-36 lg:w-36"
-                      onError={(e) => {
-                        e.currentTarget.src = spritePng(POKEMON[3].name);
-                      }}
                     />
                   </Float>
                 </div>
@@ -367,23 +398,16 @@ export default function Home() {
               rotationRange={[2, 4, 2]}
               timeOffset={1}
             >
-              <img
-                src={spriteGif(POKEMON[1].name)}
-                alt={POKEMON[1].name}
+              <PokemonSprite
+                name={POKEMON[1].name}
+                width={96}
+                height={96}
                 className="h-20 w-20 object-contain drop-shadow-[0_0_24px_rgba(255,255,255,0.28)] lg:h-24 lg:w-24"
-                onError={(e) => {
-                  e.currentTarget.src = spritePng(POKEMON[1].name);
-                }}
               />
             </Float>
           </div>
           <div className="flex flex-row space-x-12 text-sm sm:space-x-16 sm:text-lg md:space-x-24 md:text-xl">
             <ul>
-              <li>
-                <Link className="hover:underline" href="/">
-                  Home
-                </Link>
-              </li>
               <li>
                 <Link className="hover:underline" href="/battle">
                   Battle
@@ -399,7 +423,7 @@ export default function Home() {
               <li>
                 <a
                   className="hover:underline"
-                  href="https://github.com"
+                  href="https://github.com/ozyirl"
                   target="_blank"
                   rel="noreferrer"
                 >
@@ -409,17 +433,17 @@ export default function Home() {
               <li>
                 <a
                   className="hover:underline"
-                  href="https://instagram.com"
+                  href="https://www.ozy.ninja/"
                   target="_blank"
                   rel="noreferrer"
                 >
-                  Instagram
+                  Portfolio
                 </a>
               </li>
               <li>
                 <a
                   className="hover:underline"
-                  href="https://x.com"
+                  href="https://x.com/ozy2ez"
                   target="_blank"
                   rel="noreferrer"
                 >
