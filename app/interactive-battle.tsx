@@ -1069,6 +1069,13 @@ function formatSignedDelta(delta: number) {
   return `${rounded >= 0 ? "+" : ""}${rounded}%`;
 }
 
+function withAckRefreshHint(message: string): string {
+  if (/expected ack for event/i.test(message)) {
+    return `${message} Please refresh.`;
+  }
+  return message;
+}
+
 async function postBattleAction(params: {
   battleId: string;
   player: "p1" | "p2";
@@ -1116,7 +1123,8 @@ async function postBattleAction(params: {
         : typeof payload === "string"
           ? payload
           : `Action submit failed (${response.status})`;
-    const error = new Error(message) as Error & ActionSubmitError;
+    const error = new Error(withAckRefreshHint(message)) as Error &
+      ActionSubmitError;
     error.status = response.status;
     error.legalChoices = legalChoices;
     error.legalMoves = legalMoves;
@@ -3600,7 +3608,11 @@ export function InteractiveBattle({
       setAnimatedStatusText(null);
       setIsSubmittingMove(false);
       isSubmittingMoveRef.current = false;
-      setMoveUiError((error as Error).message || "Failed to submit action");
+      setMoveUiError(
+        withAckRefreshHint(
+          (error as Error).message || "Failed to submit action",
+        ),
+      );
       if (battleId) {
         try {
           const recovered = await fetchBattleState(battleId);
@@ -3624,7 +3636,9 @@ export function InteractiveBattle({
       await refetchBattleState();
     },
     onError: (error) => {
-      setMoveUiError((error as Error).message || "Continue failed");
+      setMoveUiError(
+        withAckRefreshHint((error as Error).message || "Continue failed"),
+      );
     },
   });
 
@@ -3800,7 +3814,9 @@ export function InteractiveBattle({
       } catch (error) {
         if (cancelled) return;
         setIsPlaybackRunning(false);
-        const message = (error as Error).message || "Playback sync failed";
+        const message = withAckRefreshHint(
+          (error as Error).message || "Playback sync failed",
+        );
         setPlaybackError(message);
         if (message.toLowerCase().includes("ack")) {
           await refetchBattleState();
