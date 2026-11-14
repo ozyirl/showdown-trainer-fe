@@ -243,7 +243,7 @@ type SideSetup = {
 
 type TeamSourceMode = "random" | "saved" | "manual";
 type CopilotMode = "off" | "coach" | "deep";
-type CpuModelProfile = "fast" | "reasoning";
+type CpuModelProfile = "fast" | "reasoning" | "fly";
 type GameMode = "pvp" | "ai-vs-ai";
 type GenerationKey =
   | "gen1"
@@ -385,7 +385,18 @@ const CPU_MODEL_OPTIONS: Array<{
     label: "Reasoning model",
     description: "Slower but more deliberate CPU decisions.",
   },
+  {
+    value: "fly",
+    label: "Fly CNS model",
+    description: "Trained battle policy on the fly connectome. Instant turns.",
+  },
 ];
+
+const CPU_PROFILE_BADGES: Record<CpuModelProfile, string> = {
+  fast: "Fast",
+  reasoning: "Reasoning",
+  fly: "Fly CNS",
+};
 
 const CPU_THINKING_LABELS = [
   "Analyzing matchup...",
@@ -437,7 +448,8 @@ function readStoredBattleUiPrefs(
         parsed.copilotMode !== "coach" &&
         parsed.copilotMode !== "deep") ||
       (parsed.cpuModelProfile !== "fast" &&
-        parsed.cpuModelProfile !== "reasoning")
+        parsed.cpuModelProfile !== "reasoning" &&
+        parsed.cpuModelProfile !== "fly")
     ) {
       return null;
     }
@@ -2555,8 +2567,7 @@ function BattleArena(params: {
               </div>
               <div className="mb-3 flex items-center gap-2 text-[11px] text-white/45">
                 <span>
-                  CPU profile:{" "}
-                  {cpuModelProfile === "reasoning" ? "Reasoning" : "Fast"}
+                  CPU profile: {CPU_PROFILE_BADGES[cpuModelProfile]}
                 </span>
                 {copilotLoading && (
                   <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/20 border-t-blue-400" />
@@ -3021,7 +3032,7 @@ function BattleArena(params: {
                 {isAiVsAi ? "AI Analysis" : "CPU Analysis"}
               </div>
               <div className="flex items-center gap-2 text-[7px] uppercase tracking-[0.16em] text-white/35">
-                {cpuModelProfile === "reasoning" ? "Reasoning" : "Fast"}
+                {CPU_PROFILE_BADGES[cpuModelProfile]}
                 {cpuDecisionSummary?.modelId && (
                   <span className="text-white/25 text-[7px] font-mono text-xs">
                     {cpuDecisionSummary.modelId}
