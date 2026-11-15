@@ -7,6 +7,10 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ItemIcon } from "@/components/item-icon";
 import {
+  FlyCnsBrainPanel,
+  type FlyCnsDiagnostics,
+} from "@/components/fly-cns-brain-panel";
+import {
   AiDecisionTrace,
   CoachTrace,
   useAiDecisionHistory,
@@ -121,6 +125,7 @@ type BattleState = {
     rawResponse?: unknown;
     error?: string;
     truncated?: boolean;
+    flyCns?: FlyCnsDiagnostics;
   } | null;
   lastP1AiDecision?: BattleState["lastCpuDecision"];
   lastAction?: string | MoveAcceptedAction | null;
@@ -2974,8 +2979,16 @@ function BattleArena(params: {
                 // output for each decision are in the trace above; this block
                 // holds extras for the latest decision only.
                 <div className="space-y-3">
+                  {cpuModelProfile === "fly" &&
+                    battleState.lastCpuDecision?.flyCns && (
+                      <FlyCnsBrainPanel
+                        diagnostics={battleState.lastCpuDecision.flyCns}
+                      />
+                    )}
+
                   {!hasStructuredCpuSummary &&
-                    !cpuDecisionSummary?.truncated && (
+                    !cpuDecisionSummary?.truncated &&
+                    !battleState.lastCpuDecision?.flyCns && (
                       <div className="rounded-lg border border-amber-400/15 bg-amber-400/5 px-3 py-2 text-xs text-amber-200/85">
                         Could not parse structured recommendation cleanly.
                       </div>
