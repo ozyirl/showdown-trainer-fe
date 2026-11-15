@@ -6,6 +6,12 @@ import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ItemIcon } from "@/components/item-icon";
+import {
+  AiDecisionTrace,
+  CoachTrace,
+  useAiDecisionHistory,
+} from "@/components/battle-analysis-trace";
+import { StickToBottomFeed } from "@/components/stick-to-bottom-feed";
 import { createTeambuilderApiClient } from "@/lib/teambuilder/api-client";
 import type { Team } from "@/lib/teambuilder/types";
 
@@ -182,6 +188,11 @@ type CopilotGuidance = {
   mainRisk: string;
   winConditionNote: string;
   disabled?: true;
+  /** The coach model that produced this guidance (not the CPU's model). */
+  modelId?: string;
+  copilotMode?: CopilotMode;
+  latencyMs?: number;
+  source?: "model" | "extractor" | "fallback";
 };
 
 type PlaybackEvent = {
@@ -2109,187 +2120,6 @@ function PokemonSetupPanel(params: {
   );
 }
 
-function CopilotMessageCard({ entry }: { entry: CopilotHistoryEntry }) {
-  const g = entry.guidance;
-
-  return (
-    <div className="space-y-2 border-b border-white/5 pb-3 last:border-b-0">
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-blue-400/60">
-          Turn {entry.turn}
-        </span>
-        <span
-          className={`ml-auto rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${
-            g.confidence === "high"
-              ? "bg-emerald-500/20 text-emerald-400"
-              : g.confidence === "medium"
-                ? "bg-amber-500/20 text-amber-400"
-                : "bg-red-500/20 text-red-400"
-          }`}
-        >
-          {g.confidence}
-        </span>
-      </div>
-
-      <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-2.5">
-        <div className="text-xs font-medium text-white">
-          {g.recommendedLabel}
-        </div>
-        <div className="mt-1 text-[11px] leading-relaxed text-white/60">
-          {g.reasoning}
-        </div>
-      </div>
-
-      {(g.safeAlternative || g.aggressiveAlternative) && (
-        <div className="flex gap-1.5">
-          {g.safeAlternative && (
-            <div className="flex-1 rounded-md border border-emerald-500/15 bg-emerald-500/5 px-2 py-1.5">
-              <div className="text-[9px] font-semibold uppercase text-emerald-400/60">
-                Safe
-              </div>
-              <div className="text-[11px] font-medium text-white/85">
-                {g.safeAlternative.label}
-              </div>
-              <div className="text-[10px] text-white/45">
-                {g.safeAlternative.reason}
-              </div>
-            </div>
-          )}
-          {g.aggressiveAlternative && (
-            <div className="flex-1 rounded-md border border-red-500/15 bg-red-500/5 px-2 py-1.5">
-              <div className="text-[9px] font-semibold uppercase text-red-400/60">
-                Aggro
-              </div>
-              <div className="text-[11px] font-medium text-white/85">
-                {g.aggressiveAlternative.label}
-              </div>
-              <div className="text-[10px] text-white/45">
-                {g.aggressiveAlternative.reason}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="flex gap-1.5 text-[10px]">
-        <div className="flex-1 rounded-md border border-amber-500/10 bg-amber-500/5 px-2 py-1">
-          <span className="font-semibold uppercase text-amber-400/60">
-            Risk{" "}
-          </span>
-          <span className="text-white/55">{g.mainRisk}</span>
-        </div>
-      </div>
-      <div className="text-[10px]">
-        <div className="rounded-md border border-purple-500/10 bg-purple-500/5 px-2 py-1">
-          <span className="font-semibold uppercase text-purple-400/60">
-            Win con{" "}
-          </span>
-          <span className="text-white/55">{g.winConditionNote}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function CopilotLoadingCard() {
-  return (
-    <div className="space-y-2.5 border-b border-white/5 pb-3">
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-blue-400/60">
-          Analyzing...
-        </span>
-        <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />
-      </div>
-      <div className="space-y-2">
-        <div className="h-3 w-3/4 animate-pulse rounded bg-white/10" />
-        <div className="h-3 w-1/2 animate-pulse rounded bg-white/10" />
-        <div className="h-3 w-2/3 animate-pulse rounded bg-white/8" />
-      </div>
-    </div>
-  );
-}
-
-function AiDecisionBlock({
-  label,
-  decision,
-  reasoning,
-  color,
-}: {
-  label: string;
-  decision: BattleState["lastCpuDecision"] | undefined | null;
-  reasoning: string | null | undefined;
-  color: "blue" | "rose";
-}) {
-  const [expanded, setExpanded] = useState(false);
-  if (!decision && !reasoning) return null;
-
-  const borderColor =
-    color === "blue" ? "border-blue-400/15" : "border-rose-400/15";
-  const bgColor = color === "blue" ? "bg-blue-400/5" : "bg-rose-400/5";
-  const textColor = color === "blue" ? "text-blue-300/70" : "text-rose-300/70";
-
-  return (
-    <div className={`rounded-xl border ${borderColor} ${bgColor} p-3`}>
-      <div className="flex items-center justify-between">
-        <div
-          className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${textColor}`}
-        >
-          {label}
-        </div>
-        {decision?.modelId && (
-          <span className="font-mono text-[9px] text-white/25">
-            {decision.modelId}
-          </span>
-        )}
-      </div>
-      {decision?.choice && (
-        <div className="mt-1.5 text-xs text-white/80">
-          Choice: <span className="font-medium">{decision.choice}</span>
-          {decision.source === "fallback" && (
-            <span className="ml-1.5 text-amber-300/60">(fallback)</span>
-          )}
-          {decision.truncated && (
-            <span className="ml-1.5 text-amber-300/60">(truncated)</span>
-          )}
-        </div>
-      )}
-      {reasoning && (
-        <div className="mt-2">
-          <div
-            className="whitespace-pre-wrap text-xs leading-relaxed text-white/65"
-            style={
-              expanded
-                ? undefined
-                : {
-                    display: "-webkit-box",
-                    WebkitLineClamp: 3,
-                    WebkitBoxOrient: "vertical",
-                    overflow: "hidden",
-                  }
-            }
-          >
-            {reasoning}
-          </div>
-          {reasoning.length > 180 && (
-            <button
-              type="button"
-              onClick={() => setExpanded((v) => !v)}
-              className="mt-1 text-[11px] text-white/50 hover:text-white/75"
-            >
-              {expanded ? "Show less" : "Show more"}
-            </button>
-          )}
-        </div>
-      )}
-      {decision?.latencyMs != null && (
-        <div className="mt-1.5 text-[10px] text-white/30">
-          {decision.latencyMs}ms
-        </div>
-      )}
-    </div>
-  );
-}
-
 function AiVsAiSpectatorPanel({
   onContinue,
   continuePending,
@@ -2439,7 +2269,6 @@ function BattleArena(params: {
   } = params;
   const [teamOrder, setTeamOrder] = useState("123456");
   const [cpuThinkingIndex, setCpuThinkingIndex] = useState(0);
-  const [cpuReasoningExpanded, setCpuReasoningExpanded] = useState(false);
   const loggerRef = useRef<HTMLDivElement | null>(null);
 
   const [prevWasStreaming, setPrevWasStreaming] = useState(
@@ -2450,17 +2279,6 @@ function BattleArena(params: {
     if (!cpuStream.isStreaming) {
       setCpuThinkingIndex(0);
     }
-  }
-
-  const cpuDecisionTurn = cpuStream.decision?.turn;
-  const lastCpuTurn = battleState.lastCpuDecision?.turn;
-  const [prevCpuTurnKey, setPrevCpuTurnKey] = useState(
-    `${cpuDecisionTurn}-${lastCpuTurn}`,
-  );
-  const cpuTurnKey = `${cpuDecisionTurn}-${lastCpuTurn}`;
-  if (cpuTurnKey !== prevCpuTurnKey) {
-    setPrevCpuTurnKey(cpuTurnKey);
-    setCpuReasoningExpanded(false);
   }
 
   useEffect(() => {
@@ -2495,9 +2313,6 @@ function BattleArena(params: {
   const cpuReasoning = extractCpuReasoningText(battleState.lastCpuDecision);
   const streamedCpuText = cpuStream.text.trim();
   const cpuDecisionSummary = cpuStream.decision ?? battleState.lastCpuDecision;
-  const rawCpuOutput = formatCpuRawOutput(
-    cpuStream.decision?.rawResponse ?? battleState.lastCpuDecision?.rawResponse,
-  );
   const isGenericFallback = (text: string | null | undefined) =>
     !text || /^Fallback:\s/i.test(text);
   const filteredCpuReasoning = isGenericFallback(cpuReasoning)
@@ -2519,6 +2334,44 @@ function BattleArena(params: {
   const filteredP1AiReasoning = isGenericFallback(p1AiReasoning)
     ? null
     : p1AiReasoning;
+
+  // Accumulate decisions into a per-battle history for the analysis trace.
+  // Pair each decision with the reasoning and raw output from the same
+  // source (live stream or battle state), so a stale decision never picks up
+  // newer text.
+  const cpuTraceFromStream = cpuStream.decision != null;
+  const cpuTraceInput = {
+    side: "p2",
+    label: isAiVsAi ? "P2 (AI)" : "CPU",
+    tone: "rose" as const,
+    decision: cpuStream.isStreaming ? null : cpuDecisionSummary,
+    reasoning: cpuStream.isStreaming
+      ? null
+      : cpuTraceFromStream
+        ? streamedCpuText || cpuStream.decision?.reasoning
+        : filteredCpuReasoning,
+    rawOutput: formatCpuRawOutput(
+      cpuTraceFromStream
+        ? cpuStream.decision?.rawResponse
+        : battleState.lastCpuDecision?.rawResponse,
+    ),
+  };
+  const aiDecisionHistory = useAiDecisionHistory(
+    battleState.battleId,
+    isAiVsAi
+      ? [
+          {
+            side: "p1",
+            label: "P1 (AI)",
+            tone: "blue",
+            decision: p1AiDecision,
+            reasoning: filteredP1AiReasoning,
+            rawOutput: formatCpuRawOutput(p1AiDecision?.rawResponse),
+          },
+          cpuTraceInput,
+        ]
+      : [cpuTraceInput],
+  );
 
   return (
     <div className="space-y-4">
@@ -2566,25 +2419,35 @@ function BattleArena(params: {
                   {copilotMode === "deep" ? "Deep Coach" : "Coach"}
                 </div>
               </div>
-              <div className="mb-3 flex items-center gap-2 text-[11px] text-white/45">
-                <span>
-                  CPU profile: {CPU_PROFILE_BADGES[cpuModelProfile]}
+              <div className="mb-3 flex min-w-0 items-center gap-2 text-[11px] text-white/45">
+                {/* The coach's own model, from the latest guidance; the CPU
+                    profile belongs to the opponent panel. */}
+                <span className="min-w-0 truncate">
+                  Coach model:{" "}
+                  {copilotHistory.at(-1)?.guidance.modelId ? (
+                    <span className="font-mono text-white/60">
+                      {copilotHistory.at(-1)?.guidance.modelId}
+                    </span>
+                  ) : (
+                    <span className="text-white/35">after first analysis</span>
+                  )}
                 </span>
                 {copilotLoading && (
-                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/20 border-t-blue-400" />
+                  <span className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-white/20 border-t-blue-400" />
                 )}
               </div>
-              <div className="flex-1 space-y-3 overflow-y-auto rounded-xl border border-white/10 bg-black/50 p-3">
-                {copilotHistory.length === 0 && !copilotLoading && (
-                  <div className="text-xs text-white/40">
-                    Coach analysis will appear when it&apos;s your turn.
-                  </div>
-                )}
-                {copilotHistory.map((entry, i) => (
-                  <CopilotMessageCard key={`copilot-${i}`} entry={entry} />
-                ))}
-                {copilotLoading && <CopilotLoadingCard />}
-              </div>
+              <StickToBottomFeed className="rounded-xl border border-white/10 bg-black/50 p-3">
+                <CoachTrace
+                  entries={copilotHistory}
+                  loading={copilotLoading}
+                  loadingTurn={battleState.currentTurn}
+                  empty={
+                    <div className="text-xs text-white/40">
+                      Coach analysis will appear when it&apos;s your turn.
+                    </div>
+                  }
+                />
+              </StickToBottomFeed>
             </div>
           </div>
         )}
@@ -3058,28 +2921,20 @@ function BattleArena(params: {
                 )}
               </div>
             </div>
-            <div className="mt-3 flex-1 overflow-y-auto rounded-xl border border-white/10 bg-black/40 p-3">
+            <StickToBottomFeed className="mt-3 rounded-xl border border-white/10 bg-black/40 p-3">
               {isAiVsAi ? (
-                <div className="space-y-4">
-                  <AiDecisionBlock
-                    label="P1 (AI)"
-                    decision={p1AiDecision}
-                    reasoning={filteredP1AiReasoning}
-                    color="blue"
-                  />
-                  <AiDecisionBlock
-                    label="P2 (AI)"
-                    decision={cpuDecisionSummary}
-                    reasoning={finalCpuReasoning}
-                    color="rose"
-                  />
-                  {!p1AiDecision && !cpuDecisionSummary && (
+                <AiDecisionTrace
+                  entries={aiDecisionHistory}
+                  empty={
                     <div className="text-xs text-white/40">
                       Run a turn to see AI decisions.
                     </div>
-                  )}
-                </div>
-              ) : cpuStream.isStreaming ? (
+                  }
+                />
+              ) : (
+                <div className="space-y-3">
+                  <AiDecisionTrace entries={aiDecisionHistory} />
+              {cpuStream.isStreaming ? (
                 <div className="space-y-3">
                   <div className="rounded-xl border border-blue-400/15 bg-blue-400/5 p-3">
                     <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-blue-300/70">
@@ -3115,82 +2970,27 @@ function BattleArena(params: {
                   </div>
                 </div>
               ) : cpuDecisionSummary || finalCpuReasoning ? (
+                // Reasoning, decision, latency, model, truncation and raw
+                // output for each decision are in the trace above; this block
+                // holds extras for the latest decision only.
                 <div className="space-y-3">
-                  <div className="rounded-xl border border-emerald-400/15 bg-emerald-400/5 p-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-300/70">
-                      Analysis complete
-                    </div>
-                  </div>
-
-                  {cpuDecisionSummary?.truncated && (
-                    <div className="rounded-lg border border-amber-400/15 bg-amber-400/5 px-3 py-2 text-xs text-amber-200/85">
-                      Output was truncated. The reasoning model used most of its
-                      token budget on internal chain-of-thought.
-                    </div>
-                  )}
-
                   {!hasStructuredCpuSummary &&
                     !cpuDecisionSummary?.truncated && (
                       <div className="rounded-lg border border-amber-400/15 bg-amber-400/5 px-3 py-2 text-xs text-amber-200/85">
                         Could not parse structured recommendation cleanly.
                       </div>
                     )}
-
-                  {finalCpuReasoning && (
-                    <div className="rounded-lg border border-white/10 bg-black/50 p-3">
-                      <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">
-                        Reasoning
-                      </div>
-                      <div
-                        className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-white/75"
-                        style={
-                          cpuReasoningExpanded
-                            ? undefined
-                            : {
-                                display: "-webkit-box",
-                                WebkitLineClamp: 4,
-                                WebkitBoxOrient: "vertical",
-                                overflow: "hidden",
-                              }
-                        }
-                      >
-                        {finalCpuReasoning}
-                      </div>
-                      {finalCpuReasoning.length > 220 && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setCpuReasoningExpanded((current) => !current)
-                          }
-                          className="mt-2 text-[11px] text-white/55 hover:text-white/80"
-                        >
-                          {cpuReasoningExpanded ? "Show less" : "Show more"}
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {rawCpuOutput && (
-                    <details className="rounded-lg border border-white/10 bg-black/35">
-                      <summary className="cursor-pointer px-3 py-2 text-[11px] uppercase tracking-[0.16em] text-white/45">
-                        Raw model output
-                      </summary>
-                      <div className="max-h-48 overflow-y-auto border-t border-white/10 px-3 py-2 font-mono text-[11px] leading-relaxed text-white/55">
-                        <pre className="whitespace-pre-wrap">
-                          {rawCpuOutput}
-                        </pre>
-                      </div>
-                    </details>
-                  )}
                 </div>
-              ) : (
+              ) : aiDecisionHistory.length === 0 ? (
                 <div className="text-xs text-white/40">
                   {cpuStream.isAvailable
                     ? "Opponent analysis will appear after their move."
                     : "Live CPU stream unavailable. Final CPU decision will appear after their move."}
                 </div>
+              ) : null}
+                </div>
               )}
-            </div>
+            </StickToBottomFeed>
           </div>
         </div>
       </div>
