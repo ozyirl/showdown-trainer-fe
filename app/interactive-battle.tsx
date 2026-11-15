@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CpuRetryStatus } from "@/components/cpu-retry-status";
 import { ItemIcon } from "@/components/item-icon";
 import {
   FlyCnsBrainPanel,
@@ -2926,6 +2927,7 @@ function BattleArena(params: {
                 )}
               </div>
             </div>
+            <CpuRetryStatus battleId={battleState.battleId} decision={battleState.lastCpuDecision} />
             <StickToBottomFeed className="mt-3 rounded-xl border border-white/10 bg-black/40 p-3">
               {isAiVsAi ? (
                 <AiDecisionTrace
