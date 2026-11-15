@@ -335,14 +335,3 @@ export function getPokemonFallbackSpriteUrl(species?: string): string | null {
   if (!species?.trim()) return null;
   return `https://play.pokemonshowdown.com/sprites/gen5/${normalizeSpriteName(species)}.png`;
 }
-
-export function getItemSpriteUrl(item?: string): string | null {
-  if (!item?.trim()) return null;
-  const slug = item
-    .trim()
-    .toLowerCase()
-    .replace(/[']/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/${slug}.png`;
-}

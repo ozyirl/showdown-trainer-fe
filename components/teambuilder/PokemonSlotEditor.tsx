@@ -1,5 +1,6 @@
 "use client";
 
+import { ItemIcon } from "@/components/item-icon";
 import { EVIVEditor } from "@/components/teambuilder/EVIVEditor";
 import { StatsPanel } from "@/components/stats-panel";
 import { StyledFieldset, StyledInput } from "@/components/styled-input";
@@ -8,7 +9,6 @@ import {
   COMMON_MOVES,
   COMMON_SPECIES,
   fetchPokemonDetails,
-  getItemSpriteUrl,
   getPokemonFallbackSpriteUrl,
   getPokemonSpriteUrl,
   rankSearch,
@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { Copy, FileUp, Leaf, Move, Package, Sparkles, Trash2, Zap } from "lucide-react";
 import Image from "next/image";
-import { useDeferredValue, useEffect, useState } from "react";
+import { useDeferredValue, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 
 interface PokemonSlotEditorProps {
@@ -96,42 +96,6 @@ const typeColorMap: Record<string, string> = {
 
 function normalizeAbilityInput(input: string) {
   return input.trim().toLowerCase();
-}
-
-function OptionalCatalogImage({
-  src,
-  alt,
-  className,
-  width,
-  height,
-}: {
-  src: string;
-  alt: string;
-  className: string;
-  width: number;
-  height: number;
-}) {
-  const [hidden, setHidden] = useState(false);
-
-  useEffect(() => {
-    setHidden(false);
-  }, [src]);
-
-  if (!src || hidden) return null;
-
-  return (
-    <Image
-      src={src}
-      alt={alt}
-      width={width}
-      height={height}
-      unoptimized
-      className={className}
-      onError={() => {
-        setHidden(true);
-      }}
-    />
-  );
 }
 
 export function PokemonSlotEditor({ slot, slotIndex, onChange, onRemove }: PokemonSlotEditorProps) {
@@ -303,17 +267,7 @@ export function PokemonSlotEditor({ slot, slotIndex, onChange, onRemove }: Pokem
 
           <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5">
             <div className="flex size-8 items-center justify-center rounded-md border border-white/10 bg-white/[0.02] text-[10px] text-white/40">
-              {slot.item.trim() ? (
-                <OptionalCatalogImage
-                  src={getItemSpriteUrl(slot.item) ?? ""}
-                  alt={slot.item || "Item"}
-                  width={20}
-                  height={20}
-                  className="h-5 w-5 object-contain"
-                />
-              ) : (
-                <Package className="size-3.5" />
-              )}
+              <ItemIcon item={slot.item.trim()} fallback={<Package className="size-3.5" />} />
             </div>
             <span className="text-sm text-white/65">{slot.item || "No selected item"}</span>
           </div>
@@ -448,13 +402,7 @@ export function PokemonSlotEditor({ slot, slotIndex, onChange, onRemove }: Pokem
                 }}
                 className="mb-2 flex w-full items-center gap-2 rounded-md border border-[#0015ff]/40 bg-[#0015ff]/10 px-3 py-2 text-left"
               >
-                <OptionalCatalogImage
-                  src={getItemSpriteUrl(slot.item.trim()) ?? ""}
-                  alt={slot.item.trim()}
-                  width={20}
-                  height={20}
-                  className="h-5 w-5 object-contain"
-                />
+                <ItemIcon item={slot.item.trim()} className="-my-0.5" />
                 <span className="font-medium">{slot.item.trim()}</span>
                 <span className="ml-auto text-xs text-white/60">Selected</span>
               </button>
@@ -470,13 +418,7 @@ export function PokemonSlotEditor({ slot, slotIndex, onChange, onRemove }: Pokem
                 }}
                 className="flex w-full items-center gap-2 rounded-md border border-white/10 bg-black/10 px-3 py-2 text-left hover:bg-white/10"
               >
-                <OptionalCatalogImage
-                  src={getItemSpriteUrl(item) ?? ""}
-                  alt={item}
-                  width={20}
-                  height={20}
-                  className="h-5 w-5 object-contain"
-                />
+                <ItemIcon item={item} className="-my-0.5" />
                 <span>{item}</span>
               </button>
             ))}
@@ -491,13 +433,7 @@ export function PokemonSlotEditor({ slot, slotIndex, onChange, onRemove }: Pokem
                 }}
                 className="flex w-full items-center gap-2 rounded-md border border-white/15 bg-black/15 px-3 py-2 text-left hover:bg-white/10"
               >
-                <OptionalCatalogImage
-                  src={getItemSpriteUrl(item) ?? ""}
-                  alt={item}
-                  width={20}
-                  height={20}
-                  className="h-5 w-5 object-contain"
-                />
+                <ItemIcon item={item} className="-my-0.5" />
                 <span>{item}</span>
               </button>
             ))}

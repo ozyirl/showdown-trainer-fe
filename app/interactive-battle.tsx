@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ItemIcon } from "@/components/item-icon";
 import { createTeambuilderApiClient } from "@/lib/teambuilder/api-client";
 import type { Team } from "@/lib/teambuilder/types";
 
@@ -2665,8 +2666,9 @@ function BattleArena(params: {
                       </div>
                       <div className="flex flex-wrap gap-1">
                         {itemLabel && (
-                          <span className="rounded-full border border-yellow-400/25 bg-yellow-400/10 px-1.5 py-0.5 text-[10px] text-yellow-300">
-                            📦 {itemLabel}
+                          <span className="inline-flex items-center gap-0.5 rounded-full border border-yellow-400/25 bg-yellow-400/10 px-1.5 py-0.5 text-[10px] text-yellow-300">
+                            <ItemIcon item={itemLabel} className="-my-1.5 -ml-1" />
+                            {itemLabel}
                           </span>
                         )}
                         {boosts &&
@@ -2711,7 +2713,11 @@ function BattleArena(params: {
                       )}
                       {p.item && (
                         <div className="text-white/60">
-                          Item: <span className="text-white/90">{p.item}</span>
+                          Item:{" "}
+                          <span className="inline-flex items-center align-middle text-white/90">
+                            <ItemIcon item={p.item} className="-my-1.5 -ml-0.5" />
+                            {p.item}
+                          </span>
                         </div>
                       )}
                       <div className="text-white/60">
@@ -2799,6 +2805,10 @@ function BattleArena(params: {
                             <div className="mb-2 rounded-md border border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-300">
                               🔒 Locked into{" "}
                               {battleState.availableMoves[0]?.name} by{" "}
+                              <ItemIcon
+                                item={battleState.p1Pokemon.item}
+                                className="-my-1.5"
+                              />
                               {battleState.p1Pokemon.item}
                             </div>
                           )}
@@ -2891,7 +2901,15 @@ function BattleArena(params: {
                                   {option.ability && (
                                     <span>{option.ability}</span>
                                   )}
-                                  {option.item && <span>📦 {option.item}</span>}
+                                  {option.item && (
+                                    <span className="inline-flex items-center">
+                                      <ItemIcon
+                                        item={option.item}
+                                        className="-my-1.5 -ml-1"
+                                      />
+                                      {option.item}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                             </div>
