@@ -35,6 +35,8 @@ export type AiDecisionSummary = {
   moveName?: string;
   error?: string;
   truncated?: boolean;
+  /** Fly CNS decisions name their move or switch here instead of in moveName. */
+  flyCns?: { actions: { label: string; selected: boolean }[] } | null;
 };
 
 export type AiDecisionTraceInput = {
@@ -73,7 +75,9 @@ function pickDecision(
     source: decision.source,
     choice: decision.choice,
     actionType: decision.actionType,
-    moveName: decision.moveName,
+    moveName:
+      decision.moveName ??
+      decision.flyCns?.actions.find((action) => action.selected)?.label,
     error: decision.error,
     truncated: decision.truncated,
   };
