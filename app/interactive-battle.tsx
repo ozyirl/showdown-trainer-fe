@@ -6,6 +6,7 @@ import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CpuRetryStatus } from "@/components/cpu-retry-status";
+import { FlyBrainStage } from "@/components/fly-brain-stage";
 import { ItemIcon } from "@/components/item-icon";
 import {
   FlyCnsBrainPanel,
@@ -2912,6 +2913,13 @@ function BattleArena(params: {
               </div>
             </div>
           </div>
+
+          {cpuModelProfile === "fly" && !isAiVsAi && (
+            <FlyBrainStage
+              diagnostics={battleState.lastCpuDecision?.flyCns}
+              turn={battleState.lastCpuDecision?.turn}
+            />
+          )}
 
           <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
             <div className="flex items-center justify-between">

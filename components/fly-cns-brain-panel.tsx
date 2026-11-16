@@ -30,6 +30,12 @@ export type FlyCnsDiagnostics = {
     selected: boolean;
   }[];
   state_value: number;
+  /** Per-neuron first spike step (255 = never) and spike count, as base64 bytes. */
+  neuron_activity?: {
+    graph: string;
+    first_spike_step: string;
+    spikes: string;
+  } | null;
 };
 
 const POPULATION_STYLES: Record<string, { dot: string; bar: string }> = {
@@ -41,7 +47,7 @@ const POPULATION_STYLES: Record<string, { dot: string; bar: string }> = {
 };
 
 // What each population's first spike means, for the timeline.
-const FIRST_SPIKE_NOTES: Record<string, string> = {
+export const FIRST_SPIKE_NOTES: Record<string, string> = {
   sensory: "Battle state reaches the sensory neurons.",
   central: "Central brain relays start passing the signal on.",
   kenyon:
