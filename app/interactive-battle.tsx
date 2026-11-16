@@ -3,7 +3,24 @@
 import { useAuth, useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import Image from "next/image";
+import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import {
+  Bot,
+  BrainCircuit,
+  ChevronDown,
+  Crosshair,
+  Library,
+  LoaderCircle,
+  Play,
+  Search,
+  Shuffle,
+  SlidersHorizontal,
+  Swords,
+  UserRound,
+  X,
+  Zap,
+} from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -31,6 +48,27 @@ import {
   CpuRetryNotice,
   useLiveCpuRetry,
 } from "@/components/cpu-retry-status";
+import {
+  FieldLabel,
+  MiniSprite,
+  OptionCard,
+  RadioRow,
+  RecapRow,
+  SegmentedControl,
+  TileGroup,
+} from "@/components/battle-setup/controls";
+import { FlyBrainMotif } from "@/components/battle-setup/fly-brain-motif";
+import {
+  RandomTeamsPreview,
+  SavedTeamPicker,
+  SavedTeamsEmpty,
+  SideHeading,
+} from "@/components/battle-setup/team-views";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { FlyBrainStage } from "@/components/fly-brain-stage";
 import { ItemIcon } from "@/components/item-icon";
 import {
@@ -1924,92 +1962,130 @@ function MoveSelector(params: {
   } = params;
 
   return (
-    <div className="space-y-3 rounded-xl border border-white/10 bg-black/30 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <div className="text-sm font-medium text-white/80">{title}</div>
-          <div className="text-xs text-white/45">
-            Select up to 4 moves or use auto-pick
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => onSetAutoMoves(true)}
-            className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${
-              autoMoves
-                ? "border-white/20 bg-white text-black"
-                : "border-white/10 bg-white/3 text-white/70 hover:bg-white/6"
-            }`}
-          >
-            Auto-select moves
-          </button>
-          <button
-            type="button"
-            onClick={onClearMoves}
-            className="rounded-md border border-white/10 bg-white/3 px-2.5 py-1 text-xs text-white/70 transition-colors hover:bg-white/6"
-          >
-            Clear
-          </button>
-        </div>
+    <div className="min-w-0 rounded-[4px] border border-white/10 bg-black/30">
+      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-white/[0.07] px-2.5 py-1.5">
+        <span className="min-w-0 truncate font-mono text-[10px] uppercase tracking-[0.14em] text-white/40">
+          {title}
+        </span>
+        <SegmentedControl
+          ariaLabel={`${title} selection`}
+          className="w-[132px] shrink-0"
+          value={autoMoves ? "auto" : "manual"}
+          onChange={(value) => {
+            if (value === "auto") onSetAutoMoves(true);
+            else if (autoMoves) onClearMoves();
+          }}
+          options={[
+            { value: "auto", label: "Auto", title: "Auto-select moves" },
+            { value: "manual", label: "Pick", title: "Pick up to 4 moves" },
+          ]}
+        />
       </div>
 
-      {!autoMoves && (
-        <div className="rounded-lg border border-white/10 bg-black/40 p-2 text-xs text-white/60">
-          Selected ({selectedMoves.length}/4):{" "}
-          {selectedMoves.length ? selectedMoves.join(", ") : "none"}
-        </div>
-      )}
-
-      {isLoading && (
-        <div className="text-sm text-white/55">Loading move list...</div>
-      )}
-
-      {!isLoading && !autoMoves && moveOptions.length > 0 && (
-        <div className="max-h-56 space-y-1 overflow-y-auto rounded-lg border border-white/10 bg-black/40 p-2">
-          {moveOptions.map((move) => {
-            const selected = selectedMoves.includes(move.name);
-            const disabled = !selected && selectedMoves.length >= 4;
-            return (
-              <button
-                key={move.name}
-                type="button"
-                onClick={() => onToggleMove(move.name)}
-                disabled={disabled}
-                className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors ${
-                  selected
-                    ? "border-white/20 bg-white/10 text-white"
-                    : "border-white/5 bg-transparent text-white/75 hover:border-white/15 hover:bg-white/3"
-                } disabled:cursor-not-allowed disabled:opacity-40`}
-              >
-                <div className="min-w-0">
-                  <div>{move.name}</div>
-                  <div className="text-xs text-white/40">
-                    {move.type ?? "Unknown"}
-                    {typeof move.basePower === "number"
-                      ? ` • BP ${move.basePower}`
-                      : ""}
-                    {move.category ? ` • ${move.category}` : ""}
-                  </div>
-                </div>
-                <span className="text-xs text-white/45">
-                  {selected
-                    ? "Selected"
-                    : recommendedMoves.includes(move.name)
-                      ? "Recommended"
-                      : "Add"}
+      <div className="space-y-2 p-2.5">
+        {autoMoves ? (
+          <div className="text-[11.5px] leading-snug text-white/50">
+            {recommendedMoves.length
+              ? `Auto-pick: ${recommendedMoves.slice(0, 4).join(", ")}`
+              : "Moves are auto-selected for this Pokémon."}
+          </div>
+        ) : (
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="grid min-w-0 flex-1 grid-cols-2 gap-1">
+              {Array.from({ length: 4 }, (_, index) => (
+                <span
+                  key={index}
+                  className={cn(
+                    "h-6 min-w-0 truncate rounded-[3px] border px-1.5 text-[11px] leading-[22px]",
+                    selectedMoves[index]
+                      ? "border-white/15 bg-white/[0.06] text-white/85"
+                      : "border-dashed border-white/10 text-white/25",
+                  )}
+                >
+                  {selectedMoves[index] ?? `Move ${index + 1}`}
                 </span>
+              ))}
+            </div>
+            <div className="flex shrink-0 flex-col items-end gap-1">
+              <span className="font-mono text-[10px] text-white/40">
+                {selectedMoves.length}/4
+              </span>
+              <button
+                type="button"
+                onClick={onClearMoves}
+                disabled={!selectedMoves.length}
+                className={cn(boxButtonClass, "px-1.5 py-0.5 text-[10.5px]")}
+              >
+                Clear
               </button>
-            );
-          })}
-        </div>
-      )}
+            </div>
+          </div>
+        )}
 
-      {!isLoading && !autoMoves && moveOptions.length === 0 && (
-        <div className="text-sm text-white/55">
-          No moves found for this Pokémon.
-        </div>
-      )}
+        {isLoading && (
+          <div className="text-[11.5px] text-white/45">
+            Loading move list...
+          </div>
+        )}
+
+        {!isLoading && !autoMoves && moveOptions.length > 0 && (
+          <div className="max-h-56 space-y-px overflow-y-auto rounded-[3px] border border-white/[0.07] bg-black/40 p-1">
+            {moveOptions.map((move) => {
+              const selected = selectedMoves.includes(move.name);
+              const disabled = !selected && selectedMoves.length >= 4;
+              return (
+                <button
+                  key={move.name}
+                  type="button"
+                  onClick={() => onToggleMove(move.name)}
+                  disabled={disabled}
+                  className={cn(
+                    "flex w-full min-w-0 items-center justify-between gap-2 rounded-[3px] border px-2 py-1 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                    selected
+                      ? "border-[#3b5bff]/60 bg-[#3b5bff]/[0.14] text-white"
+                      : "border-transparent text-white/75 hover:border-white/15 hover:bg-white/[0.04]",
+                  )}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-[12px]">
+                      {move.name}
+                    </span>
+                    <span className="block truncate font-mono text-[10px] text-white/35">
+                      {move.type ?? "Unknown"}
+                      {typeof move.basePower === "number"
+                        ? ` · BP ${move.basePower}`
+                        : ""}
+                      {move.category ? ` · ${move.category}` : ""}
+                    </span>
+                  </span>
+                  <span
+                    className={cn(
+                      "shrink-0 font-mono text-[9.5px] uppercase tracking-[0.12em]",
+                      selected
+                        ? ACCENT_TEXT
+                        : recommendedMoves.includes(move.name)
+                          ? "text-white/55"
+                          : "text-white/25",
+                    )}
+                  >
+                    {selected
+                      ? "Selected"
+                      : recommendedMoves.includes(move.name)
+                        ? "Rec."
+                        : "Add"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {!isLoading && !autoMoves && moveOptions.length === 0 && (
+          <div className="text-[11.5px] text-white/45">
+            No moves found for this Pokémon.
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2033,6 +2109,7 @@ function PokemonSetupPanel(params: {
   movesLoading: boolean;
 }) {
   const {
+    side,
     label,
     setup,
     onQueryChange,
@@ -2049,63 +2126,77 @@ function PokemonSetupPanel(params: {
     recommendedMoves,
     movesLoading,
   } = params;
+  const query = setup.query.trim();
+  // Once a Pokémon is picked the query holds its name; only search again if it changes.
+  const showResults = !!query && query !== setup.selectedPokemon?.name;
 
   return (
-    <div className={`${panelClass} space-y-4`}>
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-base font-semibold text-white">{label}</h3>
-          <p className="text-xs text-white/45">
-            Search a Pokémon and optionally pick moves
-          </p>
-        </div>
+    <div className="flex min-w-0 flex-col gap-2">
+      <SideHeading
+        badge={side.toUpperCase()}
+        title={label}
+        accent={side === "p1"}
+        aside={
+          setup.selectedPokemon
+            ? setup.autoMoves
+              ? "Moves auto"
+              : `Moves ${setup.selectedMoves.length}/4`
+            : "Not selected"
+        }
+      />
+
+      <div className="relative">
+        <Search
+          aria-hidden
+          className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/30"
+        />
+        <input
+          value={setup.query}
+          onChange={(e) => onQueryChange(e.target.value)}
+          aria-label={`${label} search`}
+          placeholder="Search Pokémon (e.g. Garchomp, Rotom)"
+          className="h-8 w-full rounded-[4px] border border-white/10 bg-black/40 pl-8 pr-8 text-[12.5px] text-white outline-none placeholder:text-white/30 focus:border-white/25"
+        />
         {setup.selectedPokemon && (
           <button
             type="button"
             onClick={onClearPokemon}
-            className="rounded-md border border-white/10 bg-white/3 px-2.5 py-1 text-xs text-white/70 hover:bg-white/6"
+            aria-label="Clear Pokémon"
+            title="Clear Pokémon"
+            className="absolute right-1.5 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-[3px] text-white/40 hover:bg-white/[0.08] hover:text-white"
           >
-            Clear Pokémon
+            <X className="h-3.5 w-3.5" />
           </button>
         )}
       </div>
 
-      <div className="space-y-2">
-        <label className="text-xs font-medium text-white/55">
-          Pokémon search
-        </label>
-        <input
-          value={setup.query}
-          onChange={(e) => onQueryChange(e.target.value)}
-          placeholder="Search Pokémon (e.g. Garchomp, Rotom)"
-          className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
-        />
-      </div>
-
-      {!!setup.query.trim() && (
-        <div className="space-y-2">
+      {showResults && (
+        <div className="space-y-1">
           {searchLoading && (
-            <div className="text-xs text-white/50">Searching...</div>
+            <div className="text-[11.5px] text-white/45">Searching...</div>
           )}
           {searchError && (
-            <div className="text-xs text-white/50">{searchError}</div>
+            <div className="text-[11.5px] text-white/45">{searchError}</div>
           )}
           {!searchLoading && !searchError && searchResults.length > 0 && (
-            <div className="max-h-52 space-y-1 overflow-y-auto rounded-lg border border-white/10 bg-black/40 p-2">
+            <div className="max-h-52 space-y-px overflow-y-auto rounded-[4px] border border-white/10 bg-black/40 p-1">
               {searchResults.map((pokemon) => (
                 <button
                   key={pokemon.name}
                   type="button"
                   onClick={() => onSelectPokemon(pokemon)}
-                  className="w-full rounded-md border border-white/5 px-3 py-2 text-left transition-colors hover:border-white/15 hover:bg-white/3"
+                  className="flex w-full min-w-0 items-center gap-2 rounded-[3px] border border-transparent px-1.5 py-0.5 text-left transition-colors hover:border-white/15 hover:bg-white/[0.04]"
                 >
-                  <div className="text-sm font-medium text-white">
-                    {pokemon.name}
-                  </div>
-                  <div className="text-xs text-white/45">
-                    {typeChipText(pokemon.types)}
-                    {pokemon.tier ? ` • ${pokemon.tier}` : ""}
-                  </div>
+                  <MiniSprite name={pokemon.name} size={28} />
+                  <span className="min-w-0">
+                    <span className="block truncate text-[12px] text-white">
+                      {pokemon.name}
+                    </span>
+                    <span className="block truncate font-mono text-[10px] text-white/40">
+                      {typeChipText(pokemon.types)}
+                      {pokemon.tier ? ` · ${pokemon.tier}` : ""}
+                    </span>
+                  </span>
                 </button>
               ))}
             </div>
@@ -2113,25 +2204,21 @@ function PokemonSetupPanel(params: {
         </div>
       )}
 
-      {setup.selectedPokemon && (
-        <div className="space-y-4">
-          <div className="rounded-xl border border-white/10 bg-black/40 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-sm font-medium text-white">
-                  {setup.selectedPokemon.name}
-                </div>
-                <div className="text-xs text-white/45">
-                  {typeChipText((details ?? setup.selectedPokemon).types)}
-                  {(details?.tier ?? setup.selectedPokemon.tier)
-                    ? ` • ${details?.tier ?? setup.selectedPokemon.tier}`
-                    : ""}
-                </div>
+      {setup.selectedPokemon ? (
+        <>
+          <div className="flex min-w-0 items-center gap-2.5 rounded-[4px] border border-white/10 bg-white/[0.02] px-2 py-1.5">
+            <CornerFrame className="p-0.5">
+              <MiniSprite name={setup.selectedPokemon.name} size={40} />
+            </CornerFrame>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px] font-medium text-white">
+                {setup.selectedPokemon.name}
               </div>
-              <div className="text-xs text-white/40">
-                {setup.autoMoves
-                  ? "Moves: auto"
-                  : `Moves: ${setup.selectedMoves.length}/4`}
+              <div className="truncate font-mono text-[10.5px] text-white/40">
+                {typeChipText((details ?? setup.selectedPokemon).types)}
+                {(details?.tier ?? setup.selectedPokemon.tier)
+                  ? ` · ${details?.tier ?? setup.selectedPokemon.tier}`
+                  : ""}
               </div>
             </div>
           </div>
@@ -2147,7 +2234,13 @@ function PokemonSetupPanel(params: {
             onClearMoves={onClearMoves}
             onSetAutoMoves={onSetAutoMoves}
           />
-        </div>
+        </>
+      ) : (
+        !showResults && (
+          <div className="rounded-[4px] border border-dashed border-white/10 px-2.5 py-3 text-center text-[11.5px] text-white/40">
+            Type at least two letters to search, then pick one Pokémon.
+          </div>
+        )
       )}
     </div>
   );
@@ -4064,484 +4157,641 @@ export function InteractiveBattle({
     );
   }
 
+  const battleTypeOptions =
+    setup.teamSource === "random"
+      ? RANDOM_BATTLE_OPTIONS
+      : STANDARD_BATTLE_OPTIONS;
+  const battleTypeValue =
+    setup.teamSource === "random"
+      ? setup.randomBattleType
+      : setup.standardBattleType;
+  const selectedBattleType = battleTypeOptions.find(
+    (option) => option.value === battleTypeValue,
+  );
+  const generationLabel =
+    GENERATION_OPTIONS.find((option) => option.value === setup.generation)
+      ?.label ?? setup.generation;
+  const isAiVsAi = setup.gameMode === "ai-vs-ai";
+  const effectiveCopilotMode = isAiVsAi ? "off" : setup.copilotMode;
+  const copilotLabel =
+    COPILOT_MODE_OPTIONS.find((option) => option.value === effectiveCopilotMode)
+      ?.label ?? "Off";
+  const cpuModelLabel =
+    CPU_MODEL_OPTIONS.find((option) => option.value === setup.cpuModelProfile)
+      ?.label ?? setup.cpuModelProfile;
+  const savedTeams = teamsQuery.data ?? [];
+  const sideTeamSummary = (side: SideKey) => {
+    if (setup.teamSource === "random") return "Random team";
+    if (setup.teamSource === "saved") {
+      const team = side === "p1" ? selectedP1SavedTeam : selectedP2SavedTeam;
+      return team
+        ? `${team.name} · ${teamToBattleRoster(team, setup.level).length}`
+        : "Not selected";
+    }
+    const pokemon = setup[side].selectedPokemon;
+    if (!pokemon) return "Not selected";
+    const sideSetup = setup[side];
+    return `${pokemon.name} · ${
+      sideSetup.autoMoves
+        ? "auto moves"
+        : sideSetup.selectedMoves.length
+          ? `${sideSetup.selectedMoves.length} moves`
+          : "no moves"
+    }`;
+  };
+  const manualMovesWarning =
+    setup.teamSource === "manual" &&
+    (["p1", "p2"] as const).some(
+      (side) =>
+        setup[side].selectedPokemon &&
+        !setup[side].autoMoves &&
+        !setup[side].selectedMoves.length,
+    );
+
   return (
-    <div className="space-y-6">
-      <div className={panelClass}>
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div>
-            <div className="text-xs tracking-[0.18em] text-white/40">
-              FORMAT
+    <div className="flex flex-col gap-3 lg:h-[calc(100dvh-5.75rem)] lg:min-h-[600px]">
+      <Panel className="shrink-0 flex-row items-center justify-between gap-3 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <SquareBadge>
+            <Swords className="h-3.5 w-3.5" aria-hidden />
+          </SquareBadge>
+          <div className="min-w-0">
+            <div className="text-[13px] font-medium leading-tight text-white">
+              New battle
             </div>
-            <div className="mt-2 text-sm text-white/55">
-              Quick-start defaults let you launch a battle immediately.
+            <div className="truncate font-mono text-[10px] uppercase tracking-[0.12em] text-white/40">
+              {generationLabel}
+              <span className="px-1 text-white/20">·</span>
+              {selectedBattleType?.label ?? battleTypeValue}
+              <span className="px-1 text-white/20">·</span>
+              {isAiVsAi ? "AI vs AI" : "vs CPU"}
+              <span className="px-1 text-white/20">·</span>
+              {CPU_PROFILE_BADGES[setup.cpuModelProfile]}
             </div>
-          </div>
-          <div className="rounded-full border border-white/10 bg-white/4 px-3 py-1 text-xs text-white/55">
-            Ready in 1 click
           </div>
         </div>
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          <label className="space-y-1.5">
-            <span className="text-xs text-white/50">Team source</span>
-            <select
-              value={setup.teamSource}
-              onChange={(e) =>
-                setSetup((prev) => ({
-                  ...prev,
-                  teamSource: e.target.value as TeamSourceMode,
-                }))
-              }
-              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
-            >
-              <option value="random">Showdown random teams</option>
-              <option value="saved">Use saved teams</option>
-              <option value="manual">Manual single Pokémon</option>
-            </select>
-            <div className="text-xs text-white/45">
-              {setup.teamSource === "random"
-                ? "Backend will generate Showdown random teams for the selected generation."
-                : setup.teamSource === "saved"
-                  ? "Choose saved teams from the teambuilder for both sides."
-                  : "Pick one Pokémon per side for a fast manual test battle."}
-            </div>
-          </label>
-
-          <label className="space-y-1.5">
-            <span className="text-xs text-white/50">Generation</span>
-            <select
-              value={setup.generation}
-              onChange={(e) =>
-                setSetup((prev) => ({
-                  ...prev,
-                  generation: e.target.value as GenerationKey,
-                }))
-              }
-              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
-            >
-              {GENERATION_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="flex shrink-0 items-center gap-3">
+          <IndexTag label="Setup" className="max-sm:hidden" />
+          <Link href="/teambuilder" className={boxButtonClass}>
+            Teambuilder
+          </Link>
         </div>
+      </Panel>
 
-        <div className="mt-4 rounded-xl border border-white/10 bg-black/25 p-4">
-          <div className="mb-3">
-            <div className="text-xs tracking-[0.16em] text-white/40">
-              BATTLE TYPE
-            </div>
-            <div className="mt-1 text-xs text-white/45">
-              {setup.teamSource === "random"
-                ? "Choose the random ladder format to generate teams from."
-                : "Choose the ruleset used when saved or manual teams are selected."}
-            </div>
+      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,1fr)_320px] lg:grid-rows-[minmax(0,1fr)] xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="flex min-h-0 min-w-0 flex-col gap-3 lg:overflow-y-auto">
+          <div className="grid shrink-0 gap-3 md:grid-cols-2">
+            <Panel>
+              <PanelHeader title="Format" index={1} label="Format" />
+              <div className="space-y-3 p-3">
+                <div>
+                  <FieldLabel>Team source</FieldLabel>
+                  <SegmentedControl
+                    ariaLabel="Team source"
+                    value={setup.teamSource}
+                    onChange={(teamSource) =>
+                      setSetup((prev) => ({ ...prev, teamSource }))
+                    }
+                    options={[
+                      {
+                        value: "random",
+                        label: "Random",
+                        title: "Showdown random teams",
+                        icon: <Shuffle className="h-3.5 w-3.5" aria-hidden />,
+                      },
+                      {
+                        value: "saved",
+                        label: "Saved",
+                        title: "Use saved teams",
+                        icon: <Library className="h-3.5 w-3.5" aria-hidden />,
+                      },
+                      {
+                        value: "manual",
+                        label: "Manual",
+                        title: "Manual single Pokémon",
+                        icon: <Crosshair className="h-3.5 w-3.5" aria-hidden />,
+                      },
+                    ]}
+                  />
+                  <p className="mt-1.5 text-[11px] leading-snug text-white/40">
+                    {setup.teamSource === "random"
+                      ? "Showdown generates random teams for the selected generation."
+                      : setup.teamSource === "saved"
+                        ? "Choose saved teams from the teambuilder for both sides."
+                        : "Pick one Pokémon per side for a fast manual test battle."}
+                  </p>
+                </div>
+
+                <div>
+                  <FieldLabel aside={generationLabel}>Generation</FieldLabel>
+                  <TileGroup
+                    ariaLabel="Generation"
+                    className="grid-cols-9"
+                    tileClassName="px-0 font-mono text-[11px]"
+                    value={setup.generation}
+                    onChange={(generation) =>
+                      setSetup((prev) => ({ ...prev, generation }))
+                    }
+                    options={GENERATION_OPTIONS.map((option) => ({
+                      value: option.value,
+                      label: option.value.replace("gen", ""),
+                      title: option.label,
+                    }))}
+                  />
+                </div>
+
+                <div>
+                  <FieldLabel>
+                    {setup.teamSource === "random"
+                      ? "Random battle type"
+                      : "Battle type"}
+                  </FieldLabel>
+                  <TileGroup
+                    ariaLabel="Battle type"
+                    className={
+                      setup.teamSource === "random"
+                        ? "grid-cols-2"
+                        : "grid-cols-3 sm:grid-cols-5 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5"
+                    }
+                    tileClassName={
+                      setup.teamSource === "random"
+                        ? undefined
+                        : "px-1 text-[11px]"
+                    }
+                    value={battleTypeValue}
+                    onChange={(value) =>
+                      setSetup((prev) => ({
+                        ...prev,
+                        ...(prev.teamSource === "random"
+                          ? { randomBattleType: value }
+                          : { standardBattleType: value }),
+                      }))
+                    }
+                    options={battleTypeOptions.map((option) => ({
+                      value: option.value,
+                      label: option.label,
+                      title: option.description,
+                    }))}
+                  />
+                  <p className="mt-1.5 truncate text-[11px] text-white/40">
+                    {selectedBattleType?.description}
+                  </p>
+                </div>
+              </div>
+            </Panel>
+
+            <Panel>
+              <PanelHeader title="Opponent" index={2} label="CPU" />
+              <div className="space-y-3 p-3">
+                <div>
+                  <FieldLabel>Game mode</FieldLabel>
+                  <SegmentedControl
+                    ariaLabel="Game mode"
+                    value={setup.gameMode}
+                    onChange={(gameMode) =>
+                      setSetup((prev) => ({
+                        ...prev,
+                        gameMode,
+                        ...(gameMode === "ai-vs-ai"
+                          ? { copilotMode: "off" as const }
+                          : {}),
+                      }))
+                    }
+                    options={[
+                      {
+                        value: "pvp",
+                        label: "Player vs CPU",
+                        icon: <UserRound className="h-3.5 w-3.5" aria-hidden />,
+                      },
+                      {
+                        value: "ai-vs-ai",
+                        label: "AI vs AI",
+                        icon: <Bot className="h-3.5 w-3.5" aria-hidden />,
+                      },
+                    ]}
+                  />
+                </div>
+
+                <div>
+                  <FieldLabel>CPU model</FieldLabel>
+                  <div
+                    role="radiogroup"
+                    aria-label="CPU model"
+                    className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2"
+                  >
+                    {CPU_MODEL_OPTIONS.map((option, optionIndex) => {
+                      const selected = setup.cpuModelProfile === option.value;
+                      const isFly = option.value === "fly";
+                      return (
+                        <OptionCard
+                          key={option.value}
+                          index={optionIndex + 1}
+                          label={option.label}
+                          description={option.description}
+                          selected={selected}
+                          onSelect={() =>
+                            setSetup((prev) => ({
+                              ...prev,
+                              cpuModelProfile: option.value,
+                            }))
+                          }
+                          icon={
+                            isFly ? undefined : option.value === "fast" ? (
+                              <Zap
+                                className="h-3.5 w-3.5 shrink-0 text-white/45"
+                                aria-hidden
+                              />
+                            ) : (
+                              <BrainCircuit
+                                className="h-3.5 w-3.5 shrink-0 text-white/45"
+                                aria-hidden
+                              />
+                            )
+                          }
+                          tag={
+                            isFly ? (
+                              <>
+                                <span className={ACCENT_TEXT}>Connectome</span>{" "}
+                                <span className="text-white/20">·</span> spiking
+                                policy
+                              </>
+                            ) : (
+                              "Language model"
+                            )
+                          }
+                          art={
+                            isFly ? (
+                              <FlyBrainMotif
+                                active={selected}
+                                className="h-[68px] w-[100px] xl:h-[76px] xl:w-[124px]"
+                              />
+                            ) : undefined
+                          }
+                          className={
+                            isFly
+                              ? "sm:col-span-2 lg:col-span-1 xl:col-span-2"
+                              : undefined
+                          }
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </Panel>
           </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <label className="space-y-1.5 sm:col-span-3">
-              <span className="text-xs text-white/50">
-                {setup.teamSource === "random"
-                  ? "Random battle type"
-                  : "Battle type"}
-              </span>
-              <select
-                value={
-                  setup.teamSource === "random"
-                    ? setup.randomBattleType
-                    : setup.standardBattleType
-                }
-                onChange={(e) =>
-                  setSetup((prev) => ({
-                    ...prev,
-                    ...(prev.teamSource === "random"
-                      ? { randomBattleType: e.target.value }
-                      : { standardBattleType: e.target.value }),
-                  }))
-                }
-                className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
-              >
-                {(setup.teamSource === "random"
-                  ? RANDOM_BATTLE_OPTIONS
-                  : STANDARD_BATTLE_OPTIONS
-                ).map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
+
+          <Panel className="min-h-[260px] flex-1">
+            <PanelHeader
+              title={
+                setup.teamSource === "random"
+                  ? "Teams"
+                  : setup.teamSource === "saved"
+                    ? "Saved teams"
+                    : "Pokémon"
+              }
+              index={4}
+              label={
+                setup.teamSource === "random"
+                  ? "Random"
+                  : setup.teamSource === "saved"
+                    ? "Teambuilder"
+                    : "Manual"
+              }
+              aside={
+                setup.teamSource === "saved" &&
+                teamsQuery.isFetching && (
+                  <span className="text-[11px] text-white/40">
+                    Loading teams…
+                  </span>
+                )
+              }
+            />
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {setup.teamSource === "random" && (
+                <RandomTeamsPreview
+                  playerName={playerName}
+                  formatId={resolvedFormats.randomTeamFormatid}
+                  battleTypeLabel={selectedBattleType?.label ?? "random"}
+                  sides={{
+                    p1Control: isAiVsAi ? "AI" : "You",
+                    p2Control: cpuModelLabel,
+                    coach: copilotLabel,
+                  }}
+                />
+              )}
+
+              {setup.teamSource === "saved" &&
+                (savedTeams.length ? (
+                  <div className="grid gap-4 p-3 md:grid-cols-2">
+                    <SavedTeamPicker
+                      badge="P1"
+                      title={`${playerName} team`}
+                      accent
+                      teams={savedTeams}
+                      selectedId={setup.p1SavedTeamId}
+                      onSelect={(teamId) =>
+                        setSetup((prev) => ({ ...prev, p1SavedTeamId: teamId }))
+                      }
+                    />
+                    <SavedTeamPicker
+                      badge="P2"
+                      title="CPU team"
+                      teams={savedTeams}
+                      selectedId={setup.p2SavedTeamId}
+                      onSelect={(teamId) =>
+                        setSetup((prev) => ({ ...prev, p2SavedTeamId: teamId }))
+                      }
+                    />
+                  </div>
+                ) : teamsQuery.isFetching ? (
+                  <div className="p-3 text-[12px] text-white/45">
+                    Loading saved teams…
+                  </div>
+                ) : (
+                  <SavedTeamsEmpty
+                    message={
+                      teamsQuery.error
+                        ? (teamsQuery.error as Error).message
+                        : "No saved teams found. Build one in the teambuilder first."
+                    }
+                  />
                 ))}
-              </select>
-            </label>
 
-            <label className="space-y-1.5">
-              <span className="text-xs text-white/50">Battle format ID</span>
-              <div className="rounded-lg border border-white/10 bg-black/35 px-3 py-2 font-mono text-sm text-white/85">
-                {resolvedFormats.formatid}
-              </div>
-            </label>
-            <label className="space-y-1.5">
-              <span className="text-xs text-white/50">
-                Random team format ID
-              </span>
-              <div className="rounded-lg border border-white/10 bg-black/35 px-3 py-2 font-mono text-sm text-white/85">
-                {resolvedFormats.randomTeamFormatid}
-              </div>
-            </label>
-          </div>
-        </div>
-      </div>
+              {setup.teamSource === "manual" && (
+                <div className="grid gap-4 p-3 md:grid-cols-2">
+                  <PokemonSetupPanel
+                    side="p1"
+                    label={`${playerName}'s Pokémon`}
+                    setup={setup.p1}
+                    onQueryChange={(value) =>
+                      updateSide("p1", (prev) => ({ ...prev, query: value }))
+                    }
+                    onSelectPokemon={(pokemon) =>
+                      handleSelectPokemon("p1", pokemon)
+                    }
+                    onClearPokemon={() =>
+                      updateSide("p1", () => ({
+                        query: "",
+                        selectedPokemon: null,
+                        selectedMoves: [],
+                        autoMoves: true,
+                      }))
+                    }
+                    onToggleMove={(moveName) =>
+                      handleToggleMove("p1", moveName)
+                    }
+                    onClearMoves={() =>
+                      updateSide("p1", (prev) => ({
+                        ...prev,
+                        selectedMoves: [],
+                        autoMoves: false,
+                      }))
+                    }
+                    onSetAutoMoves={(value) =>
+                      updateSide("p1", (prev) => ({
+                        ...prev,
+                        autoMoves: value,
+                      }))
+                    }
+                    searchResults={p1SearchQuery.data ?? []}
+                    searchLoading={p1SearchQuery.isFetching}
+                    searchError={
+                      p1SearchQuery.error
+                        ? (p1SearchQuery.error as Error).message
+                        : null
+                    }
+                    details={p1DetailsQuery.data ?? null}
+                    moves={p1MovesQuery.data?.moves ?? []}
+                    recommendedMoves={p1MovesQuery.data?.recommendedMoves ?? []}
+                    movesLoading={p1MovesQuery.isFetching}
+                  />
 
-      <div className={panelClass}>
-        <div className="mb-4">
-          <div className="text-xs tracking-[0.18em] text-white/40">
-            AI SETTINGS
-          </div>
-          <div className="mt-2 text-sm text-white/55">
-            Coach and CPU defaults are configured for immediate play.
-          </div>
+                  <PokemonSetupPanel
+                    side="p2"
+                    label="CPU Pokémon (P2)"
+                    setup={setup.p2}
+                    onQueryChange={(value) =>
+                      updateSide("p2", (prev) => ({ ...prev, query: value }))
+                    }
+                    onSelectPokemon={(pokemon) =>
+                      handleSelectPokemon("p2", pokemon)
+                    }
+                    onClearPokemon={() =>
+                      updateSide("p2", () => ({
+                        query: "",
+                        selectedPokemon: null,
+                        selectedMoves: [],
+                        autoMoves: true,
+                      }))
+                    }
+                    onToggleMove={(moveName) =>
+                      handleToggleMove("p2", moveName)
+                    }
+                    onClearMoves={() =>
+                      updateSide("p2", (prev) => ({
+                        ...prev,
+                        selectedMoves: [],
+                        autoMoves: false,
+                      }))
+                    }
+                    onSetAutoMoves={(value) =>
+                      updateSide("p2", (prev) => ({
+                        ...prev,
+                        autoMoves: value,
+                      }))
+                    }
+                    searchResults={p2SearchQuery.data ?? []}
+                    searchLoading={p2SearchQuery.isFetching}
+                    searchError={
+                      p2SearchQuery.error
+                        ? (p2SearchQuery.error as Error).message
+                        : null
+                    }
+                    details={p2DetailsQuery.data ?? null}
+                    moves={p2MovesQuery.data?.moves ?? []}
+                    recommendedMoves={p2MovesQuery.data?.recommendedMoves ?? []}
+                    movesLoading={p2MovesQuery.isFetching}
+                  />
+                </div>
+              )}
+            </div>
+          </Panel>
         </div>
-        <div className="mb-3">
-          <span className="mb-1.5 block text-xs text-white/50">Game mode</span>
-          <div className="flex gap-2">
-            {(
-              [
-                { value: "pvp", label: "Player vs CPU" },
-                { value: "ai-vs-ai", label: "AI vs AI" },
-              ] as const
-            ).map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() =>
-                  setSetup((prev) => ({
-                    ...prev,
-                    gameMode: opt.value,
-                    ...(opt.value === "ai-vs-ai"
-                      ? { copilotMode: "off" as const }
-                      : {}),
-                  }))
-                }
-                className={`rounded-lg border px-4 py-2 text-sm transition ${
-                  setup.gameMode === opt.value
-                    ? "border-white/30 bg-white/10 text-white"
-                    : "border-white/10 bg-black/40 text-white/50 hover:text-white/70"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="space-y-1.5">
-            <span className="text-xs text-white/50">Co-pilot mode</span>
-            <select
-              value={setup.gameMode === "ai-vs-ai" ? "off" : setup.copilotMode}
-              onChange={(e) =>
-                setSetup((prev) => ({
-                  ...prev,
-                  copilotMode: e.target.value as CopilotMode,
-                }))
-              }
-              disabled={setup.gameMode === "ai-vs-ai"}
-              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20 disabled:opacity-40"
+
+        <div className="flex min-h-0 min-w-0 flex-col gap-3">
+          <Panel className="shrink-0">
+            <PanelHeader title="Coach" index={3} label="Co-pilot" />
+            <div
+              role="radiogroup"
+              aria-label="Co-pilot mode"
+              className="space-y-1.5 p-3"
             >
               {COPILOT_MODE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
+                <RadioRow
+                  key={option.value}
+                  label={option.label}
+                  description={option.description}
+                  selected={effectiveCopilotMode === option.value}
+                  disabled={isAiVsAi}
+                  onSelect={() =>
+                    setSetup((prev) => ({ ...prev, copilotMode: option.value }))
+                  }
+                />
               ))}
-            </select>
-          </label>
-          <label className="space-y-1.5">
-            <span className="text-xs text-white/50">CPU model</span>
-            <select
-              value={setup.cpuModelProfile}
-              onChange={(e) =>
-                setSetup((prev) => ({
-                  ...prev,
-                  cpuModelProfile: e.target.value as CpuModelProfile,
-                }))
-              }
-              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
-            >
-              {CPU_MODEL_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </div>
-
-      <details className={panelClass}>
-        <summary className="cursor-pointer list-none">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs tracking-[0.18em] text-white/40">
-                ADVANCED (OPTIONAL)
-              </div>
-              <div className="mt-2 text-sm text-white/55">
-                Optional controls for reproducible battles and debugging.
-              </div>
+              {isAiVsAi && (
+                <p className="pt-0.5 text-[11px] text-white/40">
+                  The coach is off while AI plays both sides.
+                </p>
+              )}
             </div>
-            <div className="text-xs text-white/45">Expand</div>
-          </div>
-        </summary>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <label className="space-y-1.5">
-            <span className="text-xs text-white/50">Random seed</span>
-            <input
-              value={setup.randomSeedInput}
-              onChange={(e) =>
-                setSetup((prev) => ({
-                  ...prev,
-                  randomSeedInput: e.target.value,
-                }))
-              }
-              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20 disabled:opacity-50"
-              placeholder="1,2,3,4"
-              disabled={setup.teamSource !== "random"}
+          </Panel>
+
+          <Panel className="min-h-0 flex-1">
+            <PanelHeader
+              title="Summary"
+              index={5}
+              label={setupReady ? "Ready" : "Incomplete"}
             />
-            <div className="text-xs text-white/45">
-              Optional seed for deterministic battles (useful for debugging or
-              reproducing matches).
-            </div>
-          </label>
-        </div>
-      </details>
-
-      {setup.teamSource === "saved" && (
-        <div className={panelClass}>
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-medium tracking-wide text-white/70">
-                Saved Teams
-              </div>
-              <div className="mt-1 text-xs text-white/45">
-                Pulls from the existing teambuilder team list.
-              </div>
-            </div>
-            {teamsQuery.isFetching && (
-              <div className="text-xs text-white/45">Loading teams…</div>
-            )}
-          </div>
-          <div className="grid gap-4 lg:grid-cols-2">
-            <label className="space-y-1">
-              <span className="text-xs text-white/50">{playerName} team</span>
-              <select
-                value={setup.p1SavedTeamId}
-                onChange={(e) =>
-                  setSetup((prev) => ({
-                    ...prev,
-                    p1SavedTeamId: e.target.value,
-                  }))
+            <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+              <RecapRow
+                index={1}
+                label="Format"
+                value={`${generationLabel} ${selectedBattleType?.label ?? battleTypeValue}`}
+              />
+              <RecapRow index={2} label="You" value={sideTeamSummary("p1")} />
+              <RecapRow
+                index={3}
+                label="CPU"
+                value={
+                  isAiVsAi
+                    ? `AI · ${sideTeamSummary("p2")}`
+                    : sideTeamSummary("p2")
                 }
-                className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
-                disabled={!teamsQuery.data?.length}
-              >
-                <option value="">Select a saved team</option>
-                {(teamsQuery.data ?? []).map((team) => (
-                  <option key={team.id} value={team.id}>
-                    {team.name} · {team.format}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="space-y-1">
-              <span className="text-xs text-white/50">CPU team</span>
-              <select
-                value={setup.p2SavedTeamId}
-                onChange={(e) =>
-                  setSetup((prev) => ({
-                    ...prev,
-                    p2SavedTeamId: e.target.value,
-                  }))
+              />
+              <RecapRow index={4} label="Model" value={cpuModelLabel} />
+              <RecapRow index={5} label="Coach" value={copilotLabel} />
+              <RecapRow
+                index={6}
+                label="Seed"
+                value={
+                  setup.teamSource !== "random"
+                    ? "—"
+                    : setup.randomSeedInput.trim() || "Random"
                 }
-                className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
-                disabled={!teamsQuery.data?.length}
-              >
-                <option value="">Select a saved team</option>
-                {(teamsQuery.data ?? []).map((team) => (
-                  <option key={team.id} value={team.id}>
-                    {team.name} · {team.format}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          {(teamsQuery.error ||
-            (!teamsQuery.isFetching && !teamsQuery.data?.length)) && (
-            <div className="mt-3 text-xs text-white/45">
-              {teamsQuery.error
-                ? (teamsQuery.error as Error).message
-                : "No saved teams found. Build one in /teambuilder first."}
+              />
+
+              <Collapsible className="mt-2 rounded-[4px] border border-white/10">
+                <CollapsibleTrigger className="group flex w-full items-center justify-between gap-2 px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/40">
+                  <span className="flex items-center gap-2 text-[12px] text-white/70">
+                    <SlidersHorizontal
+                      className="h-3.5 w-3.5 text-white/40"
+                      aria-hidden
+                    />
+                    Advanced
+                  </span>
+                  <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-white/35">
+                    IDs · seed
+                    <ChevronDown
+                      className="h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-180"
+                      aria-hidden
+                    />
+                  </span>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="space-y-2.5 border-t border-white/[0.07] px-2.5 py-2.5">
+                  <div>
+                    <FieldLabel>Battle format ID</FieldLabel>
+                    <div className="truncate rounded-[4px] border border-white/10 bg-black/35 px-2 py-1 font-mono text-[11.5px] text-white/80">
+                      {resolvedFormats.formatid}
+                    </div>
+                  </div>
+                  <div>
+                    <FieldLabel>Random team format ID</FieldLabel>
+                    <div className="truncate rounded-[4px] border border-white/10 bg-black/35 px-2 py-1 font-mono text-[11.5px] text-white/80">
+                      {resolvedFormats.randomTeamFormatid}
+                    </div>
+                  </div>
+                  <label className="block">
+                    <FieldLabel
+                      aside={
+                        setup.teamSource === "random"
+                          ? "4 numbers"
+                          : "Random teams only"
+                      }
+                    >
+                      Random seed
+                    </FieldLabel>
+                    <input
+                      value={setup.randomSeedInput}
+                      onChange={(e) =>
+                        setSetup((prev) => ({
+                          ...prev,
+                          randomSeedInput: e.target.value,
+                        }))
+                      }
+                      className="h-7 w-full rounded-[4px] border border-white/10 bg-black/40 px-2 font-mono text-[11.5px] text-white outline-none placeholder:text-white/30 focus:border-white/25 disabled:opacity-50"
+                      placeholder="1,2,3,4"
+                      disabled={setup.teamSource !== "random"}
+                    />
+                    <span className="mt-1 block text-[11px] leading-snug text-white/40">
+                      Optional seed for deterministic battles (useful for
+                      debugging or reproducing matches).
+                    </span>
+                  </label>
+                </CollapsibleContent>
+              </Collapsible>
             </div>
-          )}
-        </div>
-      )}
 
-      {setup.teamSource === "manual" && (
-        <div className="grid gap-6 lg:grid-cols-2">
-          <PokemonSetupPanel
-            side="p1"
-            label={`${playerName}'s Pokémon`}
-            setup={setup.p1}
-            onQueryChange={(value) =>
-              updateSide("p1", (prev) => ({ ...prev, query: value }))
-            }
-            onSelectPokemon={(pokemon) => handleSelectPokemon("p1", pokemon)}
-            onClearPokemon={() =>
-              updateSide("p1", () => ({
-                query: "",
-                selectedPokemon: null,
-                selectedMoves: [],
-                autoMoves: true,
-              }))
-            }
-            onToggleMove={(moveName) => handleToggleMove("p1", moveName)}
-            onClearMoves={() =>
-              updateSide("p1", (prev) => ({
-                ...prev,
-                selectedMoves: [],
-                autoMoves: false,
-              }))
-            }
-            onSetAutoMoves={(value) =>
-              updateSide("p1", (prev) => ({ ...prev, autoMoves: value }))
-            }
-            searchResults={p1SearchQuery.data ?? []}
-            searchLoading={p1SearchQuery.isFetching}
-            searchError={
-              p1SearchQuery.error
-                ? (p1SearchQuery.error as Error).message
-                : null
-            }
-            details={p1DetailsQuery.data ?? null}
-            moves={p1MovesQuery.data?.moves ?? []}
-            recommendedMoves={p1MovesQuery.data?.recommendedMoves ?? []}
-            movesLoading={p1MovesQuery.isFetching}
-          />
-
-          <PokemonSetupPanel
-            side="p2"
-            label="CPU Pokémon (P2)"
-            setup={setup.p2}
-            onQueryChange={(value) =>
-              updateSide("p2", (prev) => ({ ...prev, query: value }))
-            }
-            onSelectPokemon={(pokemon) => handleSelectPokemon("p2", pokemon)}
-            onClearPokemon={() =>
-              updateSide("p2", () => ({
-                query: "",
-                selectedPokemon: null,
-                selectedMoves: [],
-                autoMoves: true,
-              }))
-            }
-            onToggleMove={(moveName) => handleToggleMove("p2", moveName)}
-            onClearMoves={() =>
-              updateSide("p2", (prev) => ({
-                ...prev,
-                selectedMoves: [],
-                autoMoves: false,
-              }))
-            }
-            onSetAutoMoves={(value) =>
-              updateSide("p2", (prev) => ({ ...prev, autoMoves: value }))
-            }
-            searchResults={p2SearchQuery.data ?? []}
-            searchLoading={p2SearchQuery.isFetching}
-            searchError={
-              p2SearchQuery.error
-                ? (p2SearchQuery.error as Error).message
-                : null
-            }
-            details={p2DetailsQuery.data ?? null}
-            moves={p2MovesQuery.data?.moves ?? []}
-            recommendedMoves={p2MovesQuery.data?.recommendedMoves ?? []}
-            movesLoading={p2MovesQuery.isFetching}
-          />
-        </div>
-      )}
-
-      <div className={panelClass}>
-        <div className="mb-4 text-sm font-medium tracking-wide text-white/70">
-          Battle Summary
-        </div>
-        <div className="grid gap-4 md:grid-cols-2">
-          {[
-            { label: "P1", data: setup.p1 },
-            { label: "P2", data: setup.p2 },
-          ].map(({ label, data }) => (
-            <div
-              key={label}
-              className="rounded-2xl border border-white/10 bg-linear-to-br from-white/6 to-black/40 p-5"
-            >
-              <div className="text-xs tracking-[0.16em] text-white/45">
-                {label} Team
-              </div>
-              <div className="mt-2 text-base font-medium text-white">
-                {setup.teamSource === "random"
-                  ? "Auto-generated random team"
-                  : setup.teamSource === "saved"
-                    ? ((label === "P1"
-                        ? selectedP1SavedTeam?.name
-                        : selectedP2SavedTeam?.name) ?? "Not selected")
-                    : (data.selectedPokemon?.name ?? "Not selected")}
-              </div>
-              {setup.teamSource === "saved" && (
-                <div className="mt-1 text-xs text-white/50">
-                  {label === "P1"
-                    ? selectedP1SavedTeam
-                      ? `${teamToBattleRoster(selectedP1SavedTeam, setup.level).length} Pokémon ready`
-                      : "No saved team selected"
-                    : selectedP2SavedTeam
-                      ? `${teamToBattleRoster(selectedP2SavedTeam, setup.level).length} Pokémon ready`
-                      : "No saved team selected"}
+            <div className="shrink-0 space-y-2 border-t border-white/[0.07] p-3">
+              {startBattleMutation.error && (
+                <div className="max-h-24 overflow-y-auto rounded-[4px] border border-red-400/25 bg-red-500/[0.06] px-2.5 py-1.5 text-[11.5px] text-red-200/80">
+                  {(startBattleMutation.error as Error).message}
                 </div>
               )}
-              {setup.teamSource === "manual" && data.selectedPokemon && (
-                <div className="mt-1 text-xs text-white/50">
-                  {data.autoMoves
-                    ? "Moves: auto-select"
-                    : data.selectedMoves.length
-                      ? `Moves: ${data.selectedMoves.join(", ")}`
-                      : "Moves: none selected (backend may reject if auto is off)"}
-                </div>
+              {!setupReady ? (
+                <p className="text-[11px] leading-snug text-white/45">
+                  {setup.teamSource === "saved"
+                    ? "Select a saved team for both P1 and CPU to continue."
+                    : setup.teamSource === "manual"
+                      ? "Select Pokémon for both P1 and P2 to continue."
+                      : "Choose a valid setup to continue."}
+                </p>
+              ) : (
+                manualMovesWarning && (
+                  <p className="text-[11px] leading-snug text-white/45">
+                    A side has no moves selected; the backend may reject it
+                    unless auto-pick is on.
+                  </p>
+                )
               )}
+              <button
+                type="button"
+                onClick={() => startBattleMutation.mutate()}
+                disabled={!setupReady || startBattleMutation.isPending}
+                className={cn(
+                  "flex h-11 w-full items-center justify-between gap-2 rounded-[5px] px-3.5 text-[13.5px] font-medium text-white transition-[filter,opacity] hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100",
+                  ACCENT_BG,
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  {startBattleMutation.isPending ? (
+                    <LoaderCircle
+                      className="h-4 w-4 animate-spin"
+                      aria-hidden
+                    />
+                  ) : (
+                    <Play className="h-4 w-4 fill-current" aria-hidden />
+                  )}
+                  {startBattleMutation.isPending
+                    ? "Starting battle..."
+                    : "Start battle"}
+                </span>
+                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-white/70">
+                  {resolvedFormats.formatid}
+                </span>
+              </button>
             </div>
-          ))}
-        </div>
-
-        {startBattleMutation.error && (
-          <div className="mt-4 rounded-lg border border-white/10 bg-white/2 px-3 py-2 text-sm text-white/65">
-            {(startBattleMutation.error as Error).message}
-          </div>
-        )}
-
-        <div className="mt-5 flex flex-wrap gap-3">
-          <button
-            type="button"
-            onClick={() => startBattleMutation.mutate()}
-            disabled={!setupReady || startBattleMutation.isPending}
-            className="rounded-xl border border-white/15 bg-white px-5 py-3 text-sm font-semibold text-black transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {startBattleMutation.isPending
-              ? "Starting battle..."
-              : "Start Battle"}
-          </button>
-          {!setupReady && (
-            <div className="self-center text-xs text-white/45">
-              {setup.teamSource === "saved"
-                ? "Select a saved team for both P1 and CPU to continue."
-                : setup.teamSource === "manual"
-                  ? "Select Pokémon for both P1 and P2 to continue."
-                  : "Choose a valid setup to continue."}
-            </div>
-          )}
+          </Panel>
         </div>
       </div>
     </div>
