@@ -117,7 +117,10 @@ export default function TeambuilderClient() {
     localStorage.setItem(localDraftKey(draft.id), JSON.stringify(draft));
   }, [draft, isDirty]);
 
-  const patchMutation = useMutation({
+  // The mutation object changes with its status, so the effect below depends on
+  // the stable mutateAsync alone; otherwise every save restarts it and the finished
+  // save never matches the latest edit version, which re-saves forever.
+  const { mutateAsync: patchTeam } = useMutation({
     mutationFn: ({ id, team }: { id: string; team: Team }) =>
       api.patchTeam(id, {
         name: team.name,
@@ -135,7 +138,7 @@ export default function TeambuilderClient() {
     autosaveTimerRef.current = window.setTimeout(async () => {
       try {
         setSaveState("saving");
-        const saved = await patchMutation.mutateAsync({
+        const saved = await patchTeam({
           id: draft.id,
           team: draft,
         });
@@ -171,7 +174,7 @@ export default function TeambuilderClient() {
       if (autosaveTimerRef.current)
         window.clearTimeout(autosaveTimerRef.current);
     };
-  }, [draft, isDirty, patchMutation, queryClient, api]);
+  }, [draft, isDirty, patchTeam, queryClient]);
 
   const createTeam = async () => {
     setBusyAction("create");
