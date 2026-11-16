@@ -1,9 +1,20 @@
 "use client";
 
+import { RotateCcw, SendHorizontal } from "lucide-react";
 import { useRef, useState } from "react";
+
+import {
+  ACCENT_BG,
+  Panel,
+  PanelHeader,
+  boxButtonClass,
+  formatIndex,
+} from "@/components/battle/panel";
+import { inputBoxClass, monoLabelClass } from "@/components/teambuilder/fields";
 import type { ChatMessage, ChatResponse } from "@/lib/teambuilder/api-client";
 import type { PokemonSlot, Team } from "@/lib/teambuilder/types";
 import { normalizeSlot } from "@/lib/teambuilder/types";
+import { cn } from "@/lib/utils";
 
 interface TeambuilderChatProps {
   team: Team | null;
@@ -13,6 +24,7 @@ interface TeambuilderChatProps {
     currentSlots?: PokemonSlot[];
     format?: string;
   }) => Promise<ChatResponse>;
+  className?: string;
 }
 
 const SUGGESTION_CARDS: Array<{
@@ -55,6 +67,7 @@ export function TeambuilderChat({
   team,
   onSlotsUpdated,
   chatFn,
+  className,
 }: TeambuilderChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -125,119 +138,131 @@ export function TeambuilderChat({
   const showSuggestions = messages.length === 0 && !isLoading;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/3 backdrop-blur">
-      <div className="border-b border-white/10 px-4 py-3">
-        <div className="text-xs tracking-[0.16em] text-white/40">
-          TEAMBUILDER CO-PILOT
-        </div>
-        <div className="mt-0.5 truncate text-sm text-white/60">
-          Ask the AI to build, analyze, or improve your team.
-        </div>
-      </div>
-
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto px-4 py-3"
-        style={{ minHeight: 0 }}
-      >
-        {showSuggestions && (
-          <div className="space-y-3">
-            <div className="text-xs text-white/45">
-              Try a suggestion to get started:
-            </div>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {SUGGESTION_CARDS.map((card) => (
-                <button
-                  key={card.label}
-                  type="button"
-                  onClick={() => sendMessage(card.prompt)}
-                  className="rounded-xl border border-white/10 bg-white/3 px-3 py-2.5 text-left transition-colors hover:border-white/20 hover:bg-white/6"
-                >
-                  <div className="text-sm font-medium text-white/80">
-                    {card.label}
-                  </div>
-                  <div className="mt-1 line-clamp-2 text-xs text-white/45">
-                    {card.prompt}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {messages.map((msg, idx) => (
-          <div
-            key={idx}
-            className={`mb-3 ${msg.role === "user" ? "flex justify-end" : ""}`}
-          >
-            <div
-              className={`max-w-[85%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed ${
-                msg.role === "user"
-                  ? "bg-blue-600/20 text-white/90"
-                  : "border border-white/10 bg-white/3 text-white/80"
-              }`}
+    <Panel className={cn("min-h-0", className)}>
+      <PanelHeader
+        title="Co-pilot"
+        index={5}
+        label="CO-PILOT"
+        aside={
+          messages.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setMessages([]);
+                setError(null);
+              }}
+              className={cn(boxButtonClass, "h-6 px-1.5 py-0 text-[11px]")}
+              title="Clear conversation"
             >
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/35">
-                {msg.role === "user" ? "You" : "Co-Pilot"}
+              <RotateCcw className="size-3" />
+              Clear
+            </button>
+          )
+        }
+      />
+
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        {showSuggestions && (
+          <div className="grid gap-2">
+            <p className="text-[12px] leading-5 text-white/50">
+              Ask the AI to build, analyze, or improve your team. Its picks fill
+              your slots directly.
+            </p>
+            <div className={cn(monoLabelClass, "mt-1")}>Try a suggestion</div>
+            <ul className="grid gap-1">
+              {SUGGESTION_CARDS.map((card, idx) => (
+                <li key={card.label}>
+                  <button
+                    type="button"
+                    onClick={() => sendMessage(card.prompt)}
+                    disabled={!team}
+                    title={card.prompt}
+                    className="grid w-full grid-cols-[22px_minmax(0,1fr)] gap-x-2 rounded-[4px] border border-white/[0.07] px-2.5 py-2 text-left transition-colors hover:border-white/25 hover:bg-white/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <span className="pt-px font-mono text-[10px] text-white/35">
+                      {formatIndex(idx + 1)}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-[12.5px] text-white/85">
+                        {card.label}
+                      </span>
+                      <span className="mt-0.5 line-clamp-2 block text-[11px] leading-4 text-white/40">
+                        {card.prompt}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="grid gap-2.5">
+          {messages.map((msg, idx) => (
+            <div
+              key={idx}
+              className={msg.role === "user" ? "flex justify-end" : ""}
+            >
+              <div
+                className={cn(
+                  "max-w-[90%] rounded-[4px] border px-3 py-2 text-[12.5px] leading-relaxed",
+                  msg.role === "user"
+                    ? "border-[#3b5bff]/45 bg-[#3b5bff]/[0.1] text-white/90"
+                    : "border-white/10 bg-white/[0.02] text-white/80",
+                )}
+              >
+                <div className="mb-1 font-mono text-[9.5px] uppercase tracking-[0.14em] text-white/35">
+                  {msg.role === "user" ? "You" : "Co-pilot"}
+                </div>
+                <div className="whitespace-pre-wrap wrap-break-word">{msg.content}</div>
               </div>
-              <div className="whitespace-pre-wrap wrap-break-word">{msg.content}</div>
             </div>
-          </div>
-        ))}
+          ))}
 
-        {isLoading && (
-          <div className="mb-3">
-            <div className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/3 px-3.5 py-2.5 text-sm text-white/60">
-              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />
-              Thinking...
+          {isLoading && (
+            <div className="inline-flex w-fit items-center gap-2 rounded-[4px] border border-white/10 px-3 py-2 font-mono text-[11px] text-white/55">
+              <span className={cn("inline-block size-1.5 animate-pulse", ACCENT_BG)} />
+              Thinking…
             </div>
-          </div>
-        )}
+          )}
 
-        {error && (
-          <div className="mb-3 rounded-xl border border-red-400/20 bg-red-500/5 px-3 py-2 text-sm text-red-200">
-            {error}
-          </div>
-        )}
+          {error && (
+            <div className="rounded-[4px] border border-red-400/25 bg-red-500/[0.06] px-3 py-2 text-[12px] text-red-200">
+              {error}
+            </div>
+          )}
+        </div>
       </div>
 
       <form
         onSubmit={handleSubmit}
-        className="border-t border-white/10 px-4 py-3"
+        className="flex shrink-0 gap-2 border-t border-white/[0.07] p-2.5"
       >
-        <div className="flex gap-2">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={
-              team
-                ? "Describe the team you want to build..."
-                : "Select or create a team first"
-            }
-            disabled={isLoading || !team}
-            className="flex-1 rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20 disabled:opacity-40"
-          />
-          <button
-            type="submit"
-            disabled={isLoading || !input.trim() || !team}
-            className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Send
-          </button>
-        </div>
-        {messages.length > 0 && (
-          <button
-            type="button"
-            onClick={() => {
-              setMessages([]);
-              setError(null);
-            }}
-            className="mt-2 text-xs text-white/40 hover:text-white/60"
-          >
-            Clear conversation
-          </button>
-        )}
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder={
+            team
+              ? "Describe the team you want…"
+              : "Select or create a team first"
+          }
+          aria-label="Message the co-pilot"
+          disabled={isLoading || !team}
+          className={cn(inputBoxClass, "flex-1 disabled:opacity-40")}
+        />
+        <button
+          type="submit"
+          disabled={isLoading || !input.trim() || !team}
+          className={cn(
+            boxButtonClass,
+            "h-8 shrink-0 border-[#3b5bff]/60 text-white hover:border-[#3b5bff] hover:bg-[#3b5bff]/90",
+            ACCENT_BG,
+          )}
+        >
+          <SendHorizontal className="size-3.5" />
+          Send
+        </button>
       </form>
-    </div>
+    </Panel>
   );
 }

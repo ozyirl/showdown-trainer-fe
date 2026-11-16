@@ -1,44 +1,41 @@
 "use client";
 
-import { calculateStat, type BaseStats } from "@/lib/teambuilder/catalog";
+import { ACCENT_BG } from "@/components/battle/panel";
+import { SectionLabel } from "@/components/teambuilder/fields";
+import { calculateStat, getNatureModifier, type BaseStats } from "@/lib/teambuilder/catalog";
 import { clampStat, remainingEvs, STAT_KEYS, type PokemonSlot, type StatKey } from "@/lib/teambuilder/types";
+import { cn } from "@/lib/utils";
 
 interface EVIVEditorProps {
   slot: PokemonSlot;
   onEVChange: (key: StatKey, value: number) => void;
   onIVChange: (key: StatKey, value: number) => void;
-  onNatureChange: (nature: string) => void;
   baseStats?: BaseStats | null;
   onFieldFocus?: () => void;
 }
 
-const NATURES = [
-  "Hardy",
-  "Lonely",
-  "Brave",
-  "Adamant",
-  "Naughty",
-  "Bold",
-  "Docile",
-  "Relaxed",
-  "Impish",
-  "Lax",
-  "Timid",
-  "Hasty",
-  "Serious",
-  "Jolly",
-  "Naive",
-  "Modest",
-  "Mild",
-  "Quiet",
-  "Bashful",
-  "Rash",
-  "Calm",
-  "Gentle",
-  "Sassy",
-  "Careful",
-  "Quirky",
-];
+export const STAT_LABELS: Record<StatKey, string> = {
+  hp: "HP",
+  atk: "Atk",
+  def: "Def",
+  spa: "SpA",
+  spd: "SpD",
+  spe: "Spe",
+};
+
+/** The stat a nature raises and lowers, or null for a neutral nature. */
+export function natureEffect(nature: string): { up: StatKey; down: StatKey } | null {
+  const keys = STAT_KEYS.filter((key) => key !== "hp");
+  const up = keys.find((key) => getNatureModifier(nature, key) > 1);
+  const down = keys.find((key) => getNatureModifier(nature, key) < 1);
+  return up && down ? { up, down } : null;
+}
+
+const numberInputClass =
+  "h-7 w-full min-w-0 rounded-[3px] border border-white/10 bg-white/[0.02] px-1.5 text-right font-mono text-[11.5px] tabular-nums text-white outline-none hover:border-white/20 focus:border-[#3b5bff]/70 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none";
+
+const sliderClass =
+  "relative z-10 h-6 w-full cursor-pointer appearance-none bg-transparent focus-visible:outline-none [&::-webkit-slider-runnable-track]:h-1.5 [&::-webkit-slider-runnable-track]:bg-transparent [&::-webkit-slider-thumb]:-mt-1 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-2 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-[1px] [&::-webkit-slider-thumb]:bg-white [&::-moz-range-track]:h-1.5 [&::-moz-range-track]:bg-transparent [&::-moz-range-thumb]:h-3.5 [&::-moz-range-thumb]:w-2 [&::-moz-range-thumb]:rounded-[1px] [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white";
 
 function StatRow({
   label,
@@ -56,25 +53,23 @@ function StatRow({
   onFocus?: () => void;
 }) {
   return (
-    <div className="grid grid-cols-[44px_88px_1fr_70px] items-center gap-2 text-xs">
-      <div className="text-white/60">{label}</div>
+    <div className="grid grid-cols-[32px_52px_minmax(0,1fr)_40px] items-center gap-2">
+      <div className="font-mono text-[10.5px] text-white/55">{label}</div>
       <input
         type="number"
         min={0}
         max={252}
         value={ev}
+        aria-label={`${label} EVs`}
         onFocus={onFocus}
         onChange={(e) => onEV(clampStat(Number(e.target.value), "ev"))}
-        className="rounded-md border border-white/10 bg-black/45 px-2 py-1 text-white outline-none focus:border-white/20"
+        className={numberInputClass}
       />
       <div className="relative">
-        <div className="pointer-events-none absolute inset-x-0 top-1/2 h-3 -translate-y-1/2 rounded-full bg-white/10" />
+        <div className="pointer-events-none absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 bg-white/[0.07]" />
         <div
-          className="pointer-events-none absolute left-0 top-1/2 h-3 -translate-y-1/2 rounded-full"
-          style={{
-            width: `${Math.max(0, Math.min(100, (ev / 252) * 100))}%`,
-            background: "linear-gradient(90deg, rgba(0,21,255,0.95), rgba(138,176,255,0.9))",
-          }}
+          className={cn("pointer-events-none absolute left-0 top-1/2 h-1.5 -translate-y-1/2", ACCENT_BG)}
+          style={{ width: `${Math.max(0, Math.min(100, (ev / 252) * 100))}%` }}
         />
         <input
           type="range"
@@ -82,10 +77,11 @@ function StatRow({
           max={252}
           step={1}
           value={ev}
+          aria-label={`${label} EV slider`}
           onFocus={onFocus}
           onPointerDown={onFocus}
           onChange={(e) => onEV(Number(e.target.value))}
-          className="relative z-10 h-8 w-full cursor-pointer appearance-none bg-transparent [&::-webkit-slider-runnable-track]:h-3 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-transparent [&::-webkit-slider-thumb]:mt-[-4px] [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border [&::-webkit-slider-thumb]:border-white/30 [&::-webkit-slider-thumb]:bg-black [&::-moz-range-track]:h-3 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-transparent [&::-moz-range-thumb]:h-5 [&::-moz-range-thumb]:w-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border [&::-moz-range-thumb]:border-white/30 [&::-moz-range-thumb]:bg-black"
+          className={sliderClass}
         />
       </div>
       <input
@@ -93,49 +89,42 @@ function StatRow({
         min={0}
         max={31}
         value={iv}
+        aria-label={`${label} IVs`}
         onFocus={onFocus}
         onChange={(e) => onIV(clampStat(Number(e.target.value), "iv"))}
-        className="rounded-md border border-white/10 bg-black/45 px-2 py-1 text-white outline-none focus:border-white/20"
+        className={numberInputClass}
       />
     </div>
   );
 }
 
-export function EVIVEditor({
-  slot,
-  onEVChange,
-  onIVChange,
-  onNatureChange,
-  baseStats,
-  onFieldFocus,
-}: EVIVEditorProps) {
+export function EVIVEditor({ slot, onEVChange, onIVChange, baseStats, onFieldFocus }: EVIVEditorProps) {
   const remaining = remainingEvs(slot);
   const overBudget = remaining < 0;
+  const effect = natureEffect(slot.nature);
 
   return (
-    <section className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div>
-          <div className="text-xs tracking-[0.16em] text-white/40">EV / IV TUNING</div>
-          <div className="text-sm text-white/75">Showdown-style numeric editor</div>
+    <div className="grid gap-5 @min-[640px]:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+      <div className="grid content-start gap-1.5">
+        <SectionLabel
+          aside={
+            <span className={cn("font-mono text-[10.5px]", overBudget ? "text-red-300" : "text-white/50")}>
+              {remaining} left
+            </span>
+          }
+        >
+          EV / IV
+        </SectionLabel>
+        <div className="grid grid-cols-[32px_52px_minmax(0,1fr)_40px] gap-2 font-mono text-[9.5px] uppercase tracking-[0.12em] text-white/25">
+          <div>Stat</div>
+          <div className="text-right">EV</div>
+          <div>0 – 252</div>
+          <div className="text-right">IV</div>
         </div>
-      <div className={`text-xs ${overBudget ? "text-red-300" : "text-white/60"}`}>
-        Remaining EVs: {remaining}
-      </div>
-      </div>
-
-      <div className="mb-2 grid grid-cols-[44px_88px_1fr_70px] gap-2 px-0.5 text-[11px] tracking-wide text-white/35">
-        <div>Stat</div>
-        <div>EV</div>
-        <div>Bar</div>
-        <div>IV</div>
-      </div>
-
-      <div className="space-y-2">
         {STAT_KEYS.map((key) => (
           <StatRow
             key={key}
-            label={key.toUpperCase()}
+            label={STAT_LABELS[key]}
             ev={slot.evs[key]}
             iv={slot.ivs[key]}
             onEV={(value) => onEVChange(key, value)}
@@ -145,62 +134,63 @@ export function EVIVEditor({
         ))}
       </div>
 
-      <div className="mt-4 grid gap-2 sm:grid-cols-[100px_1fr] sm:items-center">
-        <div className="text-xs text-white/50">Nature</div>
-        <select
-          value={slot.nature}
-          onFocus={onFieldFocus}
-          onChange={(e) => onNatureChange(e.target.value)}
-          className="rounded-md border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
+      <div className="grid content-start gap-1.5">
+        <SectionLabel
+          aside={
+            <span className="font-mono text-[10.5px] text-white/45">
+              {slot.nature || "—"}
+              {effect && (
+                <span className="text-white/30">
+                  {" "}
+                  +{STAT_LABELS[effect.up]} −{STAT_LABELS[effect.down]}
+                </span>
+              )}
+            </span>
+          }
         >
-          {NATURES.map((nature) => (
-            <option key={nature} value={nature} className="bg-black text-white">
-              {nature}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {baseStats ? (
-        <div className="mt-4 rounded-lg border border-white/10 bg-black/35 p-3">
-          <div className="mb-2 text-xs tracking-[0.16em] text-white/40">STAT PREVIEW (LV 100)</div>
-          <div className="grid grid-cols-[52px_52px_1fr_52px] gap-2 text-[11px] tracking-wide text-white/35">
-            <div>Stat</div>
-            <div>Base</div>
-            <div>Final</div>
-            <div>Nature</div>
-          </div>
-          <div className="mt-2 space-y-2">
+          Lv 100 stats
+        </SectionLabel>
+        {baseStats ? (
+          <>
+            <div className="grid grid-cols-[32px_32px_minmax(0,1fr)_36px] gap-2 font-mono text-[9.5px] uppercase tracking-[0.12em] text-white/25">
+              <div>Stat</div>
+              <div className="text-right">Base</div>
+              <div />
+              <div className="text-right">Final</div>
+            </div>
             {STAT_KEYS.map((key) => {
               const base = baseStats[key];
               const value = calculateStat(key, base, slot.ivs[key], slot.evs[key], 100, slot.nature);
-              const neutral = calculateStat(key, base, slot.ivs[key], slot.evs[key], 100, "Serious");
-              const delta = value - neutral;
+              const up = effect?.up === key;
+              const down = effect?.down === key;
               return (
-                <div key={`preview-${key}`} className="grid grid-cols-[52px_52px_1fr_52px] items-center gap-2 text-xs">
-                  <div className="text-white/60">{key.toUpperCase()}</div>
-                  <div className="text-white/50">{base}</div>
-                  <div className="flex items-center gap-2">
-                    <div className="h-2 flex-1 rounded-full bg-white/10">
-                      <div
-                        className="h-2 rounded-full"
-                        style={{
-                          width: `${Math.max(2, Math.min(100, (value / 500) * 100))}%`,
-                          background: "linear-gradient(90deg, rgba(0,21,255,0.95), rgba(138,176,255,0.9))",
-                        }}
-                      />
-                    </div>
-                    <span className="w-10 text-right text-white/80">{value}</span>
+                <div key={`preview-${key}`} className="grid h-7 grid-cols-[32px_32px_minmax(0,1fr)_36px] items-center gap-2">
+                  <div className={cn("font-mono text-[10.5px]", up ? "text-emerald-300" : down ? "text-amber-300" : "text-white/55")}>
+                    {STAT_LABELS[key]}
                   </div>
-                  <div className={delta > 0 ? "text-emerald-300" : delta < 0 ? "text-amber-300" : "text-white/35"}>
-                    {delta > 0 ? "+" : delta < 0 ? "−" : "•"}
+                  <div className="text-right font-mono text-[11px] tabular-nums text-white/40">{base}</div>
+                  <div className="h-1.5 bg-white/[0.07]">
+                    <div
+                      className="h-full bg-white/60"
+                      style={{ width: `${Math.max(2, Math.min(100, (value / 500) * 100))}%` }}
+                    />
+                  </div>
+                  <div
+                    className={cn(
+                      "text-right font-mono text-[11.5px] tabular-nums",
+                      up ? "text-emerald-300" : down ? "text-amber-300" : "text-white/85",
+                    )}
+                  >
+                    {value}
                   </div>
                 </div>
               );
             })}
-          </div>
-        </div>
-      ) : null}
-    </section>
+          </>
+        ) : (
+          <p className="font-mono text-[11px] text-white/35">Pick a Pokémon to preview its stats.</p>
+        )}
+      </div>
+    </div>
   );
 }

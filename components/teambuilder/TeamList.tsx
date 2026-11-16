@@ -1,6 +1,18 @@
 "use client";
 
+import { Copy, Plus, Search, Trash2 } from "lucide-react";
+
+import {
+  ACCENT_BG,
+  Panel,
+  PanelHeader,
+  boxButtonClass,
+  formatIndex,
+} from "@/components/battle/panel";
+import { SlotSprite } from "@/components/teambuilder/SlotSprite";
+import { inputBoxClass } from "@/components/teambuilder/fields";
 import type { Team } from "@/lib/teambuilder/types";
+import { cn } from "@/lib/utils";
 
 interface TeamListProps {
   teams: Team[];
@@ -13,6 +25,7 @@ interface TeamListProps {
   onDelete: () => void;
   loading: boolean;
   busyAction?: string | null;
+  className?: string;
 }
 
 export function TeamList({
@@ -26,6 +39,7 @@ export function TeamList({
   onDelete,
   loading,
   busyAction,
+  className,
 }: TeamListProps) {
   const filtered = teams.filter((team) => {
     const q = search.trim().toLowerCase();
@@ -36,81 +50,148 @@ export function TeamList({
       (team.notes ?? "").toLowerCase().includes(q)
     );
   });
+  const selectedTeam = teams.find((team) => team.id === selectedTeamId);
 
   return (
-    <aside className="flex min-h-[640px] flex-col rounded-2xl border border-white/10 bg-white/[0.03] backdrop-blur">
-      <div className="border-b border-white/10 p-3">
-        <div className="mb-2 text-xs tracking-[0.16em] text-white/40">TEAMS</div>
-        <input
-          value={search}
-          onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Search teams..."
-          className="w-full rounded-lg border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
-        />
-        <div className="mt-2 grid grid-cols-2 gap-2">
+    <Panel className={cn("min-h-0", className)}>
+      <PanelHeader
+        title="Teams"
+        index={1}
+        label="TEAMS"
+      />
+
+      <div className="grid shrink-0 gap-2 border-b border-white/[0.07] p-2.5">
+        <label className="relative block">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-white/30" />
+          <input
+            value={search}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Search teams…"
+            aria-label="Search teams"
+            className={cn(inputBoxClass, "pl-8")}
+          />
+        </label>
+        <div className="grid grid-cols-2 gap-2">
           <button
+            type="button"
             onClick={onCreate}
             disabled={loading || busyAction === "create"}
-            className="rounded-lg border border-white/15 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-            style={{ background: "linear-gradient(180deg, rgba(0,21,255,0.2), rgba(0,21,255,0.1))" }}
+            className={cn(
+              boxButtonClass,
+              "justify-center border-[#3b5bff]/60 text-white hover:border-[#3b5bff] hover:bg-[#3b5bff]/90",
+              ACCENT_BG,
+            )}
           >
-            {busyAction === "create" ? "Creating..." : "+ New"}
+            <Plus className="size-3.5" />
+            {busyAction === "create" ? "Creating…" : "New"}
           </button>
           <button
+            type="button"
             onClick={onDuplicate}
             disabled={!selectedTeamId || !!busyAction}
-            className="rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white/70 disabled:opacity-40"
+            className={cn(boxButtonClass, "justify-center")}
           >
-            Duplicate
+            <Copy className="size-3.5" />
+            {busyAction === "duplicate" ? "Copying…" : "Duplicate"}
           </button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {loading ? (
-          <div className="p-3 text-sm text-white/50">Loading teams...</div>
+          <div className="px-3 py-3 font-mono text-[11px] text-white/40">
+            Loading teams…
+          </div>
         ) : filtered.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-white/10 bg-black/25 p-3 text-sm text-white/50">
-            No teams found.
+          <div className="px-3 py-3 text-[12px] text-white/45">
+            {teams.length === 0 ? "No teams yet. Create one." : "No teams found."}
           </div>
         ) : (
-          <div className="space-y-2">
-            {filtered.map((team) => {
+          <ul>
+            {filtered.map((team, idx) => {
               const selected = team.id === selectedTeamId;
+              const species = team.slots
+                .map((slot) => slot.species.trim())
+                .filter(Boolean);
               return (
-                <button
-                  key={team.id}
-                  onClick={() => onSelect(team.id)}
-                  className={`w-full rounded-xl border p-3 text-left transition-colors ${
-                    selected
-                      ? "border-white/20 bg-white/[0.05]"
-                      : "border-white/10 bg-black/30 hover:bg-white/[0.03]"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="truncate text-sm font-medium text-white">{team.name}</div>
-                    <div className="text-[11px] text-white/40">{team.slots.length}/6</div>
-                  </div>
-                  <div className="mt-1 text-xs uppercase tracking-[0.12em] text-white/45">{team.format || "custom"}</div>
-                  <div className="mt-2 line-clamp-2 text-xs text-white/45">
-                    {(team.notes || "No notes yet.").trim()}
-                  </div>
-                </button>
+                <li key={team.id} className="border-b border-white/[0.06]">
+                  <button
+                    type="button"
+                    onClick={() => onSelect(team.id)}
+                    aria-current={selected ? "true" : undefined}
+                    className={cn(
+                      "relative grid w-full gap-1 px-3 py-2.5 text-left transition-colors",
+                      selected
+                        ? "bg-white/[0.045]"
+                        : "hover:bg-white/[0.025]",
+                    )}
+                  >
+                    {selected && (
+                      <span
+                        aria-hidden
+                        className={cn("absolute inset-y-0 left-0 w-[2px]", ACCENT_BG)}
+                      />
+                    )}
+                    <span className="flex items-center justify-between gap-2">
+                      <span
+                        className={cn(
+                          "truncate text-[12.5px] font-medium",
+                          selected ? "text-white" : "text-white/80",
+                        )}
+                      >
+                        {team.name}
+                      </span>
+                      <span className="shrink-0 font-mono text-[10px] text-white/30">
+                        {formatIndex(idx + 1)}
+                      </span>
+                    </span>
+                    <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-white/40">
+                      {team.format || "custom"}
+                      <span className="px-1 text-white/20">·</span>
+                      {team.slots.length}/6
+                    </span>
+                    {species.length > 0 && (
+                      <span className="flex h-6 items-center gap-0.5">
+                        {species.slice(0, 6).map((name, i) => (
+                          <SlotSprite
+                            key={`${name}-${i}`}
+                            species={name}
+                            size={24}
+                            animated={false}
+                          />
+                        ))}
+                      </span>
+                    )}
+                    {team.notes?.trim() && (
+                      <span className="truncate text-[11px] text-white/40">
+                        {team.notes.trim()}
+                      </span>
+                    )}
+                  </button>
+                </li>
               );
             })}
-          </div>
+          </ul>
         )}
       </div>
 
-      <div className="border-t border-white/10 p-2">
+      <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-white/[0.07] px-2.5 py-2">
+        <span className="min-w-0 truncate font-mono text-[10px] uppercase tracking-[0.12em] text-white/30">
+          {selectedTeam ? selectedTeam.name : "No team selected"}
+        </span>
         <button
+          type="button"
           onClick={onDelete}
           disabled={!selectedTeamId || !!busyAction}
-          className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white/60 hover:bg-white/[0.03] disabled:opacity-40"
+          className={cn(
+            boxButtonClass,
+            "shrink-0 hover:border-red-400/40 hover:bg-red-500/10 hover:text-red-200",
+          )}
         >
-          {busyAction === "delete" ? "Deleting..." : "Delete selected team"}
+          <Trash2 className="size-3.5" />
+          {busyAction === "delete" ? "Deleting…" : "Delete"}
         </button>
-      </div>
-    </aside>
+      </footer>
+    </Panel>
   );
 }

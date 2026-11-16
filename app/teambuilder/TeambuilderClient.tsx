@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { ArrowLeft, X } from "lucide-react";
 import { useAuth, UserButton } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { boxButtonClass } from "@/components/battle/panel";
 import { TeamEditor } from "@/components/teambuilder/TeamEditor";
 import { TeambuilderChat } from "@/components/teambuilder/TeambuilderChat";
 import { TeamList } from "@/components/teambuilder/TeamList";
@@ -17,6 +19,7 @@ import {
   normalizeTeam,
   type Team,
 } from "@/lib/teambuilder/types";
+import { cn } from "@/lib/utils";
 
 const TEAMS_KEY = ["teambuilder", "teams"] as const;
 
@@ -272,13 +275,6 @@ export default function TeambuilderClient() {
     setSaveState("idle");
   };
 
-  const handleAddSlot = () => {
-    if (!draft) return;
-    if (draft.slots.length >= 6) return;
-    handleTeamChange({ ...draft, slots: [...draft.slots, createEmptySlot()] });
-    setSelectedSlotIndex(draft.slots.length);
-  };
-
   const handleChatSlotsUpdated = (
     incomingSlots: typeof draft extends null
       ? never
@@ -316,89 +312,143 @@ export default function TeambuilderClient() {
     }
   };
 
-  const headerStatus = (() => {
-    if (selectedTeamQuery.isFetching && !draft) return "Loading team...";
-    if (saveState === "saving") return "Autosaving changes";
-    if (isDirty) return "Unsaved changes";
-    if (saveState === "saved") return "All changes saved";
-    return "Ready";
+  const saveStatus: { label: string; tone: string } = (() => {
+    if (selectedTeamQuery.isFetching && !draft)
+      return { label: "Loading", tone: "bg-white/30" };
+    if (saveState === "saving")
+      return { label: "Saving", tone: "bg-[#3b5bff] animate-pulse" };
+    if (saveState === "error")
+      return { label: "Save failed", tone: "bg-red-400" };
+    if (isDirty) return { label: "Unsaved", tone: "bg-amber-300" };
+    if (saveState === "saved") return { label: "Saved", tone: "bg-emerald-400" };
+    return { label: draft ? "Up to date" : "Ready", tone: "bg-white/30" };
   })();
 
   const teams = teamsQuery.data ?? [];
+  const loadError = teamsQuery.isError
+    ? `Failed to load teams: ${statusFromError(teamsQuery.error)}`
+    : selectedTeamQuery.isError
+      ? `Failed to load selected team: ${statusFromError(selectedTeamQuery.error)}`
+      : null;
+  const banner = loadError
+    ? { type: "error" as const, text: loadError }
+    : statusBanner;
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_18%_12%,rgba(0,21,255,0.16),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(0,21,255,0.12),transparent_46%),radial-gradient(circle_at_50%_85%,rgba(0,21,255,0.07),transparent_44%)]" />
-      <div className="mx-auto max-w-[1680px] px-4 py-5 sm:px-6 lg:px-8">
-        <header className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/3 px-4 py-3 backdrop-blur">
-          <div className="flex items-center gap-3">
-            <Link
-              href="/"
-              className="rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white/70 hover:bg-white/[0.03]"
-            >
-              ← Home
-            </Link>
-            <div>
-              <div className="text-xs tracking-[0.18em] text-white/40">
-                POKEMON SHOWDOWN-STYLE TEAMBUILDER
-              </div>
+    <div className="flex min-h-dvh flex-col bg-black text-white lg:h-dvh lg:overflow-hidden">
+      <div className="mx-auto flex w-full max-w-[1680px] flex-1 flex-col gap-3 p-3 sm:p-4 lg:min-h-0 lg:px-6">
+        <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-[5px] border border-white/10 bg-[#0a0a0b] px-3 py-2">
+          <Link href="/" className={cn(boxButtonClass, "h-7")}>
+            <ArrowLeft className="size-3.5" />
+            Home
+          </Link>
+          <span aria-hidden className="h-6 w-px bg-white/10" />
+          <div className="min-w-0">
+            <h1 className="text-[14px] font-medium leading-5 tracking-tight text-white">
+              Teambuilder
+            </h1>
+            <div className="truncate font-mono text-[10px] uppercase tracking-[0.14em] text-white/35">
+              {draft ? (
+                <>
+                  {draft.name || "Untitled"}
+                  <span className="px-1 text-white/20">·</span>
+                  {draft.format || "custom"}
+                  <span className="px-1 text-white/20">·</span>
+                  {draft.slots.filter((slot) => slot.species.trim()).length}/6
+                </>
+              ) : (
+                "Showdown-style team editor"
+              )}
             </div>
           </div>
-          <div className="flex items-center gap-3">
+
+          <div className="ml-auto flex min-w-0 items-center gap-3">
+            {banner && (
+              <div
+                className={cn(
+                  "hidden min-w-0 items-center gap-1.5 rounded-[4px] border px-2 py-1 text-[11.5px] md:flex",
+                  banner.type === "error"
+                    ? "border-red-400/25 bg-red-500/[0.06] text-red-200"
+                    : banner.type === "success"
+                      ? "border-emerald-400/20 bg-emerald-500/[0.05] text-emerald-200"
+                      : "border-white/10 bg-white/[0.03] text-white/65",
+                )}
+                role="status"
+              >
+                <span className="max-w-[360px] truncate" title={banner.text}>
+                  {banner.text}
+                </span>
+                {!loadError && (
+                  <button
+                    type="button"
+                    onClick={() => setStatusBanner(null)}
+                    aria-label="Dismiss"
+                    className="text-current opacity-60 hover:opacity-100"
+                  >
+                    <X className="size-3" />
+                  </button>
+                )}
+              </div>
+            )}
+            <span
+              className="inline-flex shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-white/55"
+              aria-live="polite"
+            >
+              <span className={cn("size-1.5", saveStatus.tone)} />
+              {saveStatus.label}
+            </span>
+            <span aria-hidden className="h-6 w-px bg-white/10" />
             <UserButton afterSignOutUrl="/" />
           </div>
         </header>
 
-        <div className="grid gap-4 xl:grid-cols-[400px_1fr]">
-          <div className="flex flex-col gap-4">
-            <TeamList
-              teams={teams}
-              selectedTeamId={selectedTeamId}
-              search={search}
-              onSearchChange={setSearch}
-              onSelect={(id) => {
-                setSelectedTeamId(id);
-                setSelectedSlotIndex(0);
-                setStatusBanner(null);
-              }}
-              onCreate={createTeam}
-              onDuplicate={duplicateTeam}
-              onDelete={deleteTeam}
-              loading={teamsQuery.isLoading}
-              busyAction={busyAction}
-            />
-            <div className="h-[520px]">
-              <TeambuilderChat
-                team={draft}
-                onSlotsUpdated={handleChatSlotsUpdated}
-                chatFn={(params) => api.chat(params)}
-              />
-            </div>
-          </div>
+        <div className="grid gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[208px_minmax(0,1fr)_280px] xl:grid-cols-[224px_minmax(0,1fr)_300px] min-[1400px]:grid-cols-[240px_minmax(0,1fr)_340px]">
+          <TeamList
+            className="max-h-[360px] lg:max-h-none"
+            teams={teams}
+            selectedTeamId={selectedTeamId}
+            search={search}
+            onSearchChange={setSearch}
+            onSelect={(id) => {
+              setSelectedTeamId(id);
+              setSelectedSlotIndex(0);
+              setStatusBanner(null);
+            }}
+            onCreate={createTeam}
+            onDuplicate={duplicateTeam}
+            onDelete={deleteTeam}
+            loading={teamsQuery.isLoading}
+            busyAction={busyAction}
+          />
 
-          <div className="space-y-4">
-            {(teamsQuery.isError || selectedTeamQuery.isError) && (
-              <div className="rounded-xl border border-red-400/20 bg-red-500/5 p-3 text-sm text-red-200">
-                {teamsQuery.isError
-                  ? `Failed to load teams: ${statusFromError(teamsQuery.error)}`
-                  : `Failed to load selected team: ${statusFromError(selectedTeamQuery.error)}`}
+          <main className="flex min-w-0 flex-col gap-3 lg:min-h-0">
+            {banner && (
+              <div
+                className={cn(
+                  "rounded-[4px] border px-3 py-2 text-[12px] md:hidden",
+                  banner.type === "error"
+                    ? "border-red-400/25 bg-red-500/[0.06] text-red-200"
+                    : "border-white/10 bg-white/[0.03] text-white/65",
+                )}
+              >
+                {banner.text}
               </div>
             )}
-
             <TeamEditor
               team={draft}
               selectedSlotIndex={selectedSlotIndex}
               onSelectSlot={setSelectedSlotIndex}
               onTeamChange={handleTeamChange}
-              onAddSlot={handleAddSlot}
-              statusText={
-                selectedTeamId
-                  ? `Editing team ${selectedTeamId}`
-                  : "No team selected"
-              }
-              saveState={saveState}
+              loading={selectedTeamQuery.isFetching}
             />
-          </div>
+          </main>
+
+          <TeambuilderChat
+            className="h-[520px] lg:h-auto"
+            team={draft}
+            onSlotsUpdated={handleChatSlotsUpdated}
+            chatFn={(params) => api.chat(params)}
+          />
         </div>
       </div>
     </div>

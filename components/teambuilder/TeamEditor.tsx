@@ -1,90 +1,92 @@
 "use client";
 
+import { AlertTriangle, Plus } from "lucide-react";
+
+import { ItemIcon } from "@/components/item-icon";
+import { IndexTag, Panel, SquareBadge } from "@/components/battle/panel";
 import { PokemonSlotEditor } from "@/components/teambuilder/PokemonSlotEditor";
-import {
-  getPokemonFallbackSpriteUrl,
-  getPokemonSpriteUrl,
-} from "@/lib/teambuilder/catalog";
+import { SlotSprite } from "@/components/teambuilder/SlotSprite";
+import { TeamOverview } from "@/components/teambuilder/TeamOverview";
+import { inputBoxClass, monoLabelClass } from "@/components/teambuilder/fields";
 import {
   createEmptySlot,
-  remainingEvs,
   validateTeam,
   type PokemonSlot,
   type Team,
 } from "@/lib/teambuilder/types";
-import Image from "next/image";
-import { useEffect, useState } from "react";
+import { cn } from "@/lib/utils";
 
 interface TeamEditorProps {
   team: Team | null;
   selectedSlotIndex: number;
   onSelectSlot: (index: number) => void;
   onTeamChange: (team: Team) => void;
-  onAddSlot: () => void;
-  statusText?: string | null;
-  saveState?: "idle" | "saving" | "saved" | "error";
-}
-
-function slotLabel(slot: PokemonSlot, index: number) {
-  if (slot.nickname?.trim()) return slot.nickname.trim();
-  if (slot.species.trim()) return slot.species.trim();
-  return `Slot ${index + 1}`;
+  loading?: boolean;
 }
 
 function SlotTab({
   slot,
   index,
   selected,
+  filled,
   onClick,
 }: {
   slot: PokemonSlot;
   index: number;
   selected: boolean;
+  /** False for the padding tabs past the end of `team.slots`. */
+  filled: boolean;
   onClick: () => void;
 }) {
-  const sprite =
-    getPokemonSpriteUrl(slot.species) ??
-    getPokemonFallbackSpriteUrl(slot.species);
-  const [spriteVisible, setSpriteVisible] = useState(true);
-
-  useEffect(() => {
-    setSpriteVisible(true);
-  }, [sprite]);
-
-  const displaySprite = sprite && spriteVisible;
+  const species = slot.species.trim();
+  const label = slot.nickname?.trim() || species;
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`flex min-h-16 items-center gap-2 border px-3 py-2 text-left transition-colors ${
+      aria-pressed={selected}
+      title={label || `Slot ${index + 1}`}
+      className={cn(
+        "relative flex h-[76px] min-w-0 flex-col items-center justify-end rounded-[4px] border px-1.5 pb-1.5 pt-1 transition-colors",
         selected
-          ? "border-white/20 bg-white/[0.05]"
-          : "border-white/10 bg-black/30 hover:bg-white/[0.03]"
-      }`}
+          ? "border-[#3b5bff]/70 bg-[#3b5bff]/[0.08]"
+          : filled
+            ? "border-white/10 bg-[#0a0a0b] hover:border-white/25 hover:bg-white/[0.03]"
+            : "border-dashed border-white/10 bg-[#0a0a0b] hover:border-white/25",
+      )}
     >
-      <div className="flex h-10 w-10 items-center justify-center rounded-md border border-white/10 bg-black/40">
-        {displaySprite ? (
-          <Image
-            src={sprite}
-            alt={slot.species || `Slot ${index + 1}`}
-            width={32}
-            height={32}
-            unoptimized
-            className="h-8 w-8 object-contain"
-            onError={() => {
-              setSpriteVisible(false);
-            }}
+      <SquareBadge
+        className={cn(
+          "absolute left-1 top-1 h-5 min-w-5 px-1 text-[10px]",
+          !selected && "bg-white/[0.08] text-white/55",
+        )}
+      >
+        {index + 1}
+      </SquareBadge>
+      {slot.item.trim() && (
+        <span className="absolute right-1 top-1" title={slot.item}>
+          <ItemIcon item={slot.item.trim()} />
+        </span>
+      )}
+      <span className="grid h-10 w-10 place-items-center">
+        {species ? (
+          <SlotSprite
+            species={species}
+            size={40}
+            fallback={<span className="font-mono text-[10px] text-white/30">?</span>}
           />
         ) : (
-          <span className="text-[10px] text-white/35">#{index + 1}</span>
+          <Plus className="size-4 text-white/25" />
         )}
-      </div>
-      <div className="min-w-0">
-        <div className="truncate text-sm text-white">
-          {slotLabel(slot, index)}
-        </div>
-        <div className="text-xs text-white/45">EV {remainingEvs(slot)}</div>
-      </div>
+      </span>
+      <span
+        className={cn(
+          "mt-0.5 w-full truncate text-center text-[11.5px]",
+          label ? (selected ? "text-white" : "text-white/75") : "font-mono text-[10px] uppercase tracking-[0.12em] text-white/30",
+        )}
+      >
+        {label || "Empty"}
+      </span>
     </button>
   );
 }
@@ -94,22 +96,21 @@ export function TeamEditor({
   selectedSlotIndex,
   onSelectSlot,
   onTeamChange,
-  onAddSlot,
-  statusText,
-  saveState = "idle",
+  loading,
 }: TeamEditorProps) {
-  const [screen, setScreen] = useState<"team" | "editor">("team");
-
   if (!team) {
     return (
-      <section className="flex min-h-[640px] items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] p-8 text-center backdrop-blur">
-        <div>
-          <div className="text-lg font-medium text-white">Select a team</div>
-          <p className="mt-2 text-sm text-white/55">
+      <Panel className="min-h-[320px] flex-1 items-center justify-center p-8 text-center">
+        <IndexTag index={2} label="TEAM" />
+        <div className="mt-3 text-[14px] font-medium text-white/85">
+          {loading ? "Loading team…" : "Select a team"}
+        </div>
+        {!loading && (
+          <p className="mt-1.5 max-w-xs text-[12px] text-white/45">
             Choose a team from the list or create a new one to start editing.
           </p>
-        </div>
-      </section>
+        )}
+      </Panel>
     );
   }
 
@@ -140,96 +141,81 @@ export function TeamEditor({
   };
 
   return (
-    <section className="min-h-[640px] rounded-2xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur">
-      <div className="mb-4 grid gap-3 xl:grid-cols-[1.2fr_1fr_auto_auto] xl:items-end">
-        <label className="grid gap-1">
-          <span className="text-xs tracking-[0.16em] text-white/40">
-            TEAM NAME
-          </span>
-          <input
-            value={team.name}
-            onChange={(e) => updateRoot("name", e.target.value)}
-            className="rounded-lg border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
-          />
-        </label>
-        <label className="grid gap-1">
-          <span className="text-xs tracking-[0.16em] text-white/40">
-            FORMAT
-          </span>
-          <input
-            value={team.format}
-            onChange={(e) => updateRoot("format", e.target.value)}
-            className="rounded-lg border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none focus:border-white/20"
-            placeholder="gen9ou"
-          />
-        </label>
-      </div>
-
-      <div className="space-y-4">
-        <div className="overflow-hidden rounded-xl border border-white/10">
-          <div className="flex items-stretch overflow-x-auto">
-            {slots.map((slot, idx) => (
-              <SlotTab
-                key={`tab-${idx}`}
-                slot={slot}
-                index={idx}
-                selected={idx === selectedSlotIndex}
-                onClick={() => onSelectSlot(idx)}
-              />
-            ))}
-            <button
-              type="button"
-              onClick={onAddSlot}
-              disabled={team.slots.length >= 6}
-              className="min-h-16 min-w-14 border-l border-white/10 bg-black/35 px-4 text-xl text-white/70 disabled:opacity-40"
-            >
-              +
-            </button>
+    <>
+      <Panel className="shrink-0">
+        <div className="grid gap-2 p-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,150px)_minmax(0,1.4fr)_auto] sm:items-center">
+          <label className="flex min-w-0 items-center gap-2">
+            <span className={cn(monoLabelClass, "w-12 shrink-0 sm:w-auto")}>Name</span>
+            <input
+              value={team.name}
+              onChange={(e) => updateRoot("name", e.target.value)}
+              className={cn(inputBoxClass, "font-medium")}
+            />
+          </label>
+          <label className="flex min-w-0 items-center gap-2">
+            <span className={cn(monoLabelClass, "w-12 shrink-0 sm:w-auto")}>Format</span>
+            <input
+              value={team.format}
+              onChange={(e) => updateRoot("format", e.target.value)}
+              className={cn(inputBoxClass, "font-mono text-[12px]")}
+              placeholder="gen9ou"
+            />
+          </label>
+          <label className="flex min-w-0 items-center gap-2">
+            <span className={cn(monoLabelClass, "w-12 shrink-0 sm:w-auto")}>Notes</span>
+            <textarea
+              value={team.notes ?? ""}
+              onChange={(e) => updateRoot("notes", e.target.value)}
+              rows={1}
+              wrap="off"
+              className={cn(inputBoxClass, "resize-none overflow-hidden py-[7px] leading-4")}
+              placeholder="Matchup notes, leads, and gameplan…"
+            />
+          </label>
+          <IndexTag index={2} label="TEAM" className="hidden sm:inline" />
+        </div>
+        {validationErrors.length > 0 && (
+          <div
+            className="flex items-center gap-2 border-t border-white/[0.07] px-3 py-1.5 text-[11px] text-amber-200/85"
+            title={validationErrors.join("\n")}
+          >
+            <AlertTriangle className="size-3.5 shrink-0" />
+            <span className="truncate">{validationErrors[0]}</span>
+            {validationErrors.length > 1 && (
+              <span className="shrink-0 font-mono text-[10px] text-amber-200/50">
+                +{validationErrors.length - 1} more
+              </span>
+            )}
           </div>
-        </div>
+        )}
+      </Panel>
 
-        <div className="rounded-xl border border-white/10 bg-black/30 p-3">
-          <PokemonSlotEditor
-            slot={activeSlot}
-            slotIndex={selectedSlotIndex}
-            onChange={(next) => updateSlot(selectedSlotIndex, next)}
-            onRemove={() => clearSlot(selectedSlotIndex)}
+      <div className="grid shrink-0 grid-cols-3 gap-1.5 sm:grid-cols-6" role="group" aria-label="Team slots">
+        {slots.map((slot, idx) => (
+          <SlotTab
+            key={`tab-${idx}`}
+            slot={slot}
+            index={idx}
+            filled={idx < team.slots.length}
+            selected={idx === selectedSlotIndex}
+            onClick={() => onSelectSlot(idx)}
           />
-        </div>
+        ))}
       </div>
 
-      <label className="mt-4 grid gap-1">
-        <span className="text-xs tracking-[0.16em] text-white/40">NOTES</span>
-        <textarea
-          value={team.notes ?? ""}
-          onChange={(e) => updateRoot("notes", e.target.value)}
-          rows={2}
-          className="resize-none rounded-lg border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
-          placeholder="Matchup notes, leads, and gameplan..."
-        />
-      </label>
-
-      <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
-        <div className="rounded-xl border border-white/10 bg-black/35 p-3 text-sm">
-          <div className="text-xs tracking-[0.16em] text-white/40">STATUS</div>
-          <div className="mt-1 text-white/70">
-            {statusText ?? "Ready"}
-
-            {saveState === "saved" && " • Saved"}
-            {saveState === "error" && " • Save failed"}
-          </div>
-          {validationErrors.length > 0 && (
-            <ul className="mt-2 list-disc pl-4 text-xs text-amber-200/90">
-              {validationErrors.slice(0, 4).map((error) => (
-                <li key={error}>{error}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <div className="text-xs text-white/40">
-          Two-screen flow · tabbed slot editing · contextual search panel
-        </div>
-      </div>
-    </section>
+      <PokemonSlotEditor
+        slot={activeSlot}
+        slotIndex={selectedSlotIndex}
+        onChange={(next) => updateSlot(selectedSlotIndex, next)}
+        onRemove={() => clearSlot(selectedSlotIndex)}
+        idleContent={
+          <TeamOverview
+            slots={slots}
+            selectedSlotIndex={selectedSlotIndex}
+            onSelectSlot={onSelectSlot}
+          />
+        }
+      />
+    </>
   );
 }
