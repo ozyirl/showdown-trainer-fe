@@ -153,7 +153,7 @@ export function StickToBottomFeed({
         <button
           type="button"
           onClick={() => scrollToBottom()}
-          className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-white/15 bg-black/80 px-2.5 py-1 text-[11px] text-white/80 shadow-lg backdrop-blur transition-colors hover:bg-black hover:text-white"
+          className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-[4px] border border-white/15 bg-black/85 px-2.5 py-1 text-[11px] text-white/80 shadow-lg backdrop-blur transition-colors hover:bg-black hover:text-white"
         >
           <ArrowDownIcon className="size-3" />
           {jumpLabel}

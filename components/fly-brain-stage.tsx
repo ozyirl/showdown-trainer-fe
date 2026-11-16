@@ -1,9 +1,28 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { RotateCcw } from "lucide-react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import { ChevronDown, PanelRightOpen, RotateCcw } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { cn } from "@/lib/utils";
+import {
+  ACCENT_TEXT,
+  CornerFrame,
+  Panel,
+  PanelHeader,
+  boxButtonClass,
+} from "@/components/battle/panel";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   FIRST_SPIKE_NOTES,
   type FlyCnsDiagnostics,
@@ -21,7 +40,7 @@ import {
 const LAYOUT_URL = "/fly/brain-layout.json";
 const STEP_MS = 90;
 const NEVER_FIRED = 255;
-const CANVAS_HEIGHT = 230;
+const DEFAULT_CANVAS_HEIGHT = 150;
 
 // Same hues as the population dots in FlyCnsBrainPanel (Tailwind 400 shades).
 const POPULATION_COLORS: Record<string, string> = {
@@ -173,7 +192,7 @@ function FlyGlyph({ thinking }: { thinking: boolean }) {
     ? { scaleY: [1, 0.35, 1], transition: { duration: 0.14, repeat: Infinity } }
     : { scaleY: 1 };
   return (
-    <svg viewBox="0 0 48 48" className="h-10 w-10 shrink-0" aria-hidden>
+    <svg viewBox="0 0 48 48" className="h-8 w-8 shrink-0" aria-hidden>
       {[-1, 1].map((side) => (
         <motion.ellipse
           key={side}
@@ -217,10 +236,18 @@ export function FlyBrainStage({
   diagnostics,
   turn,
   className,
+  index,
+  canvasHeight = DEFAULT_CANVAS_HEIGHT,
+  onOpenAnalysis,
 }: {
   diagnostics: FlyCnsDiagnostics | null | undefined;
   turn?: number;
   className?: string;
+  /** Panel number shown in the header tag. */
+  index?: number;
+  canvasHeight?: number;
+  /** Opens the full CPU analysis; shows an "Analysis" button when set. */
+  onOpenAnalysis?: () => void;
 }) {
   const layout = useBrainLayout();
   const reducedMotion = useReducedMotion();
@@ -229,6 +256,7 @@ export function FlyBrainStage({
   const dragRef = useRef({ yaw: 0, pitch: 0.12, active: false, x: 0, y: 0 });
   const [step, setStep] = useState(0);
   const [replayKey, setReplayKey] = useState(0);
+  const [timelineOpen, setTimelineOpen] = useState(false);
 
   const steps = diagnostics?.steps ?? 32;
   const activity = useMemo<Activity | null>(() => {
@@ -273,7 +301,7 @@ export function FlyBrainStage({
     const resize = () => {
       const ratio = window.devicePixelRatio || 1;
       canvas.width = Math.round(frame.clientWidth * ratio);
-      canvas.height = Math.round(CANVAS_HEIGHT * ratio);
+      canvas.height = Math.round(frame.clientHeight * ratio);
     };
     resize();
     const observer = new ResizeObserver(resize);
@@ -371,11 +399,6 @@ export function FlyBrainStage({
 
   const replaying = Boolean(activity) && step < steps;
   const chosen = diagnostics?.actions.find((action) => action.selected) ?? null;
-  const chosenPhrase = chosen
-    ? chosen.choice.startsWith("switch")
-      ? `switched to ${chosen.label}`
-      : `chose ${chosen.label}`
-    : null;
   const topDescending = diagnostics?.top_descending[0];
   const activeNow = counters?.active[Math.min(step, steps)];
   const spikesNow = counters?.spikes[Math.min(step, counters.spikes.length - 1)] ?? 0;
@@ -387,107 +410,173 @@ export function FlyBrainStage({
     .filter((population) => population.first_spike_step !== null)
     .sort((a, b) => (a.first_spike_step ?? 0) - (b.first_spike_step ?? 0));
 
-  return (
-    <div
+  // Narration lines in order; the compact view shows the latest ones reached.
+  const narration: { key: string; step: number; text: ReactNode }[] = timeline.map(
+    (population) => ({
+      key: population.key,
+      step: population.first_spike_step ?? 0,
+      text: (
+        <>
+          {FIRST_SPIKE_NOTES[population.key] ?? `${population.label} fires.`}
+          {population.key === "descending" && topDescending
+            ? ` Busiest: ${topDescending.cell_type}.`
+            : ""}
+        </>
+      ),
+    }),
+  );
+  if (chosen) {
+    narration.push({
+      key: "readout",
+      step: steps,
+      text: (
+        <>
+          Descending activity is read out as{" "}
+          {chosen.choice.startsWith("switch") ? "a switch to " : "a move: "}
+          <span className="font-medium text-white">{chosen.label}</span> (
+          {Math.round(chosen.probability * 100)}% sure).
+        </>
+      ),
+    });
+  }
+  const reachedCount = narration.filter((line) => step >= line.step).length;
+  const latestLines = narration.slice(Math.max(0, reachedCount - 2), Math.max(reachedCount, 1));
+  const caption = layout
+    ? `${layout.placed.toLocaleString("en-US")} of ${layout.neuronCount.toLocaleString("en-US")} model neurons drawn at their cell bodies in the Janelia FlyEM male CNS connectome (v1.0), about ${Math.round(layout.extentUm)} µm across; sensory neurons with cell bodies outside the CNS aren't drawn. Drag to rotate.`
+    : "Janelia FlyEM male CNS connectome (v1.0).";
+
+  const narrationLine = (line: (typeof narration)[number], latest: boolean) => (
+    <li
+      key={line.key}
       className={cn(
-        "relative shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-[#05070b] text-white",
-        className,
+        "flex gap-2 transition-opacity duration-300",
+        step >= line.step ? "opacity-100" : "opacity-25",
       )}
     >
-      <div className="flex items-center gap-3 px-4 pt-3">
+      <span
+        className={cn(
+          "w-8 shrink-0 text-right font-mono tabular-nums",
+          latest ? ACCENT_TEXT : "text-white/35",
+        )}
+      >
+        {String(line.step).padStart(2, "0")}
+      </span>
+      <span className={latest ? "text-white/80" : "text-white/60"}>{line.text}</span>
+    </li>
+  );
+
+  return (
+    <Panel className={cn("shrink-0 overflow-hidden bg-[#07080a]", className)}>
+      <PanelHeader
+        title="Fly brain"
+        index={index}
+        label="Fly CNS"
+        aside={
+          <>
+            {activity && (
+              <button
+                type="button"
+                onClick={() => setReplayKey((key) => key + 1)}
+                className={cn(boxButtonClass, "px-1.5 py-0.5 text-[11px]")}
+                aria-label="Replay the brain activity"
+                title="Replay"
+              >
+                <RotateCcw className="h-3 w-3" aria-hidden />
+              </button>
+            )}
+            {onOpenAnalysis && (
+              <button
+                type="button"
+                onClick={onOpenAnalysis}
+                className={cn(boxButtonClass, "px-1.5 py-0.5 text-[11px]")}
+              >
+                <PanelRightOpen className="h-3 w-3" aria-hidden />
+                Analysis
+              </button>
+            )}
+          </>
+        }
+      />
+
+      <div className="flex items-center gap-2.5 px-3 pt-2">
         <FlyGlyph thinking={replaying} />
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-amber-200">
-            {!diagnostics
-              ? "The fly is waiting for its first move"
-              : replaying
-                ? "The fly is thinking…"
-                : chosenPhrase
-                  ? `The fly ${chosenPhrase}`
-                  : "The fly decided"}
+          <div className="truncate text-[13px] font-medium text-white">
+            {!diagnostics ? (
+              "The fly is waiting for its first move"
+            ) : replaying ? (
+              "The fly is thinking…"
+            ) : chosen ? (
+              <>
+                The fly {chosen.choice.startsWith("switch") ? "switched to" : "chose"}{" "}
+                <span className={ACCENT_TEXT}>{chosen.label}</span>
+              </>
+            ) : (
+              "The fly decided"
+            )}
           </div>
-          <div className="truncate text-[11px] text-white/45">
-            {diagnostics
-              ? `${turn ? `Turn ${turn} · ` : ""}spiking model on real fly wiring`
-              : "A spiking model of the fruit fly's central nervous system plays the CPU side."}
+          <div className="truncate font-mono text-[10px] tabular-nums text-white/40">
+            {diagnostics ? (
+              <>
+                {turn ? `T${turn} · ` : ""}
+                <span className="text-white/75">{spikesNow.toLocaleString("en-US")}</span> spikes ·{" "}
+                <span className="text-white/75">{neuronsNow.toLocaleString("en-US")}</span> neurons
+                · step {Math.min(step, steps)}/{steps}
+              </>
+            ) : (
+              "A spiking model of the fruit fly's CNS plays the CPU side."
+            )}
           </div>
         </div>
-        {activity && (
-          <button
-            type="button"
-            onClick={() => setReplayKey((key) => key + 1)}
-            className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] text-white/60 transition hover:border-white/25 hover:text-white"
-          >
-            <RotateCcw className="h-3 w-3" aria-hidden />
-            Replay
-          </button>
-        )}
       </div>
 
-      <div
-        ref={frameRef}
-        className="relative mt-1 cursor-grab touch-none active:cursor-grabbing"
-        style={{ height: CANVAS_HEIGHT }}
-        onPointerDown={(event) => {
-          dragRef.current = { ...dragRef.current, active: true, x: event.clientX, y: event.clientY };
-          event.currentTarget.setPointerCapture(event.pointerId);
-        }}
-        onPointerMove={(event) => {
-          const drag = dragRef.current;
-          if (!drag.active) return;
-          drag.yaw += (event.clientX - drag.x) * 0.01;
-          drag.pitch = Math.max(-0.9, Math.min(0.9, drag.pitch + (event.clientY - drag.y) * 0.01));
-          drag.x = event.clientX;
-          drag.y = event.clientY;
-        }}
-        onPointerUp={() => {
-          dragRef.current.active = false;
-        }}
-      >
-        <canvas
-          ref={canvasRef}
-          className="absolute inset-0 h-full w-full"
-          aria-label="The fly's neurons, drawn at their real positions, lighting up as they spike"
-        />
-        {!layout && (
-          <div className="absolute inset-0 grid place-items-center text-xs text-white/35">
-            Loading the fly&apos;s brain…
-          </div>
-        )}
-        {diagnostics && (
-          <div className="pointer-events-none absolute left-3 top-1 text-[11px] leading-tight">
-            <div>
-              <span className="text-sm font-semibold tabular-nums">
-                {spikesNow.toLocaleString("en-US")}
-              </span>{" "}
-              <span className="text-white/50">spikes</span>
+      <CornerFrame className="mx-3 mt-2">
+        <div
+          ref={frameRef}
+          // Shorter on short viewports; the canvas follows the frame's size.
+          className="relative h-[var(--canvas-h)] cursor-grab touch-none active:cursor-grabbing [@media(max-height:820px)]:h-[calc(var(--canvas-h)*0.85)]"
+          style={{ "--canvas-h": `${canvasHeight}px` } as CSSProperties}
+          title="Drag to rotate"
+          onPointerDown={(event) => {
+            dragRef.current = { ...dragRef.current, active: true, x: event.clientX, y: event.clientY };
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            const drag = dragRef.current;
+            if (!drag.active) return;
+            drag.yaw += (event.clientX - drag.x) * 0.01;
+            drag.pitch = Math.max(-0.9, Math.min(0.9, drag.pitch + (event.clientY - drag.y) * 0.01));
+            drag.x = event.clientX;
+            drag.y = event.clientY;
+          }}
+          onPointerUp={() => {
+            dragRef.current.active = false;
+          }}
+        >
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0 h-full w-full"
+            aria-label="The fly's neurons, drawn at their real positions, lighting up as they spike"
+          />
+          {!layout && (
+            <div className="absolute inset-0 grid place-items-center font-mono text-[11px] text-white/35">
+              Loading the fly&apos;s brain…
             </div>
-            <div>
-              <span className="text-sm font-semibold tabular-nums">
-                {neuronsNow.toLocaleString("en-US")}
-              </span>{" "}
-              <span className="text-white/50">neurons active</span>
-            </div>
-          </div>
-        )}
-        {diagnostics && (
-          <div className="pointer-events-none absolute right-3 top-1 text-[10px] tabular-nums text-white/40">
-            step {Math.min(step, steps)} / {steps}
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      </CornerFrame>
 
       {layout && (
-        <div className="flex flex-wrap gap-x-3 gap-y-1 px-4 pb-1 text-[10px] text-white/60">
+        <div className="flex flex-wrap gap-x-2.5 gap-y-0.5 px-3 pt-1.5 font-mono text-[10px] text-white/50">
           {POPULATION_ORDER.filter((name) => layout.populations.includes(name)).map((name) => (
             <span key={name} className="inline-flex items-center gap-1">
               <span
-                className="h-2 w-2 rounded-full"
+                className="h-1.5 w-1.5 rounded-[1px]"
                 style={{ backgroundColor: POPULATION_COLORS[name] }}
               />
               {POPULATION_NAMES[name]}
               {diagnostics && (
-                <span className="tabular-nums text-white/90">
+                <span className="tabular-nums text-white/85">
                   {(activeNow?.get(name) ?? 0).toLocaleString("en-US")}
                 </span>
               )}
@@ -496,63 +585,44 @@ export function FlyBrainStage({
         </div>
       )}
 
-      {diagnostics && (
-        <ol className="space-y-1 px-4 pb-2 pt-1 text-[11px] leading-snug">
-          {timeline.map((population) => {
-            const reached = step >= (population.first_spike_step ?? 0);
-            return (
-              <li
-                key={population.key}
-                className={cn(
-                  "flex gap-2 transition-opacity duration-300",
-                  reached ? "opacity-100" : "opacity-25",
-                )}
-              >
-                <span className="w-12 shrink-0 font-semibold tabular-nums text-amber-200">
-                  step {population.first_spike_step}
-                </span>
-                <span className="text-white/75">
-                  {FIRST_SPIKE_NOTES[population.key] ?? `${population.label} fires.`}
-                  {population.key === "descending" && topDescending
-                    ? ` Busiest: ${topDescending.cell_type}.`
-                    : ""}
-                </span>
-              </li>
-            );
-          })}
-          {chosen && (
-            <li
-              className={cn(
-                "flex gap-2 transition-opacity duration-300",
-                replaying ? "opacity-25" : "opacity-100",
-              )}
-            >
-              <span className="w-12 shrink-0 font-semibold tabular-nums text-amber-200">
-                step {steps}
-              </span>
-              <span className="text-white/75">
-                Descending activity is read out as{" "}
-                {chosen.choice.startsWith("switch") ? "a switch to " : "a move: "}
-                <span className="font-semibold text-white">{chosen.label}</span> (
-                {Math.round(chosen.probability * 100)}% sure).
-              </span>
-            </li>
-          )}
-        </ol>
-      )}
-
       {diagnostics && !activity && (
-        <div className="px-4 pb-2 text-[10px] text-amber-200/60">
+        <div className="px-3 pt-1.5 text-[10px] text-amber-200/60">
           {layout && diagnostics.neuron_activity
             ? "This brain layout was built for a different graph, so spikes aren't drawn."
             : "The model service didn't send per-neuron activity, so spikes aren't drawn."}
         </div>
       )}
-      <div className="border-t border-white/5 px-4 py-1.5 text-[9px] text-white/30">
-        {layout
-          ? `${layout.placed.toLocaleString("en-US")} of ${layout.neuronCount.toLocaleString("en-US")} model neurons drawn at their cell bodies in the Janelia FlyEM male CNS connectome (v1.0), about ${Math.round(layout.extentUm)} µm across; sensory neurons with cell bodies outside the CNS aren't drawn. Drag to rotate.`
-          : "Janelia FlyEM male CNS connectome (v1.0)."}
-      </div>
-    </div>
+
+      {diagnostics && latestLines.length > 0 && !timelineOpen && (
+        // Fixed height so the stage doesn't resize as the replay narrates.
+        <ol
+          className="mt-2 h-[4.75rem] space-y-1 overflow-hidden border-t border-white/[0.07] px-3 pt-2 text-[11px] leading-snug [&_li>span:last-child]:line-clamp-2"
+          aria-live="polite"
+        >
+          {latestLines.map((line, position) =>
+            narrationLine(line, position === latestLines.length - 1),
+          )}
+        </ol>
+      )}
+
+      {/* The full timeline replaces the latest lines, so opening it barely
+          changes the stage's height. */}
+      <Collapsible open={timelineOpen} onOpenChange={setTimelineOpen}>
+        <CollapsibleTrigger className="group mt-1.5 flex w-full items-center justify-between gap-2 border-t border-white/[0.07] px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-white/40 transition-colors hover:text-white/75">
+          <span>{diagnostics ? `Full timeline · ${narration.length} events` : "About this view"}</span>
+          <ChevronDown className="h-3 w-3 transition-transform group-data-[state=open]:rotate-180" aria-hidden />
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="max-h-[7.5rem] overflow-y-auto px-3 pb-2">
+            {narration.length > 0 && (
+              <ol className="space-y-1 text-[11px] leading-snug">
+                {narration.map((line) => narrationLine(line, false))}
+              </ol>
+            )}
+            <p className="mt-2 text-[10px] leading-relaxed text-white/30">{caption}</p>
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+    </Panel>
   );
 }

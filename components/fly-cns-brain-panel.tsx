@@ -84,16 +84,16 @@ export function FlyCnsBrainPanel({
   return (
     <div
       className={cn(
-        "rounded-xl border border-emerald-400/15 bg-emerald-400/[0.04] p-3",
+        "rounded-[4px] border border-white/10 bg-white/[0.02] p-3",
         className,
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-300/80">
+        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-white/55">
           <Brain className="h-3.5 w-3.5" />
           Fly brain activity
         </div>
-        <div className="text-[10px] text-white/35">
+        <div className="font-mono text-[10px] text-white/35">
           {diagnostics.steps ?? diagnostics.spikes_per_step.length} simulation
           steps
         </div>
@@ -123,7 +123,7 @@ export function FlyCnsBrainPanel({
         {diagnostics.spikes_per_step.map((count, step) => (
           <motion.div
             key={step}
-            className="flex-1 rounded-sm bg-emerald-300/50"
+            className="flex-1 rounded-[1px] bg-white/30"
             initial={{ height: 0 }}
             animate={{ height: `${Math.max(4, (count / peakStep) * 100)}%` }}
             transition={{ delay: step * 0.015, duration: 0.25 }}
@@ -143,7 +143,7 @@ export function FlyCnsBrainPanel({
               <div className="flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2 text-white/75">
                   <span
-                    className={cn("h-2 w-2 shrink-0 rounded-full", style.dot)}
+                    className={cn("h-2 w-2 shrink-0 rounded-[1px]", style.dot)}
                   />
                   <span className="truncate">{population.label}</span>
                 </div>
@@ -154,9 +154,9 @@ export function FlyCnsBrainPanel({
                   </span>
                 </div>
               </div>
-              <div className="mt-1 h-1 overflow-hidden rounded-full bg-white/5">
+              <div className="mt-1 h-1 overflow-hidden rounded-[1px] bg-white/5">
                 <motion.div
-                  className={cn("h-full rounded-full", style.bar)}
+                  className={cn("h-full rounded-[1px]", style.bar)}
                   initial={{ width: 0 }}
                   animate={{ width: `${share * 100}%` }}
                   transition={{ duration: 0.4 }}
@@ -168,7 +168,7 @@ export function FlyCnsBrainPanel({
       </div>
 
       <div className="mt-4">
-        <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">
+        <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-white/40">
           Readout: chance of each choice
         </div>
         <div className="mt-2 space-y-1.5">
@@ -179,7 +179,7 @@ export function FlyCnsBrainPanel({
                   className={cn(
                     "truncate",
                     action.selected
-                      ? "font-medium text-emerald-200"
+                      ? "font-medium text-[#9aabff]"
                       : "text-white/60",
                   )}
                 >
@@ -191,17 +191,17 @@ export function FlyCnsBrainPanel({
                 <span
                   className={cn(
                     "shrink-0 tabular-nums",
-                    action.selected ? "text-emerald-200" : "text-white/45",
+                    action.selected ? "text-[#9aabff]" : "text-white/45",
                   )}
                 >
                   {(action.probability * 100).toFixed(1)}%
                 </span>
               </div>
-              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/5">
+              <div className="mt-1 h-1.5 overflow-hidden rounded-[1px] bg-white/5">
                 <motion.div
                   className={cn(
-                    "h-full rounded-full",
-                    action.selected ? "bg-emerald-400" : "bg-white/25",
+                    "h-full rounded-[1px]",
+                    action.selected ? "bg-[#3b5bff]" : "bg-white/25",
                   )}
                   initial={{ width: 0 }}
                   animate={{ width: `${action.probability * 100}%` }}
@@ -233,7 +233,7 @@ export function FlyCnsBrainPanel({
             <ol className="space-y-1.5">
               {timeline.map((population) => (
                 <li key={population.key} className="flex gap-2 text-xs">
-                  <span className="w-12 shrink-0 tabular-nums text-amber-200/80">
+                  <span className="w-12 shrink-0 font-mono tabular-nums text-white/40">
                     step {population.first_spike_step}
                   </span>
                   <span className="text-white/65">
@@ -247,14 +247,14 @@ export function FlyCnsBrainPanel({
 
           {diagnostics.top_descending.length > 0 && (
             <div>
-              <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">
+              <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-white/40">
                 Busiest descending neurons
               </div>
               <div className="mt-1.5 flex flex-wrap gap-1">
                 {diagnostics.top_descending.map((neuron) => (
                   <span
                     key={neuron.root_id}
-                    className="rounded-md border border-emerald-400/15 bg-emerald-400/5 px-1.5 py-0.5 font-mono text-[10px] text-emerald-100/80"
+                    className="rounded-[3px] border border-white/10 bg-white/[0.03] px-1.5 py-0.5 font-mono text-[10px] text-white/70"
                     title={`Root ID ${neuron.root_id}`}
                   >
                     {neuron.cell_type} · {neuron.spikes}

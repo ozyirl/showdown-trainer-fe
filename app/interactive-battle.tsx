@@ -4,8 +4,33 @@ import { useAuth, useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { CpuRetryStatus } from "@/components/cpu-retry-status";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  ACCENT_BG,
+  ACCENT_TEXT,
+  CornerFrame,
+  IndexTag,
+  Panel,
+  PanelHeader,
+  SquareBadge,
+  boxButtonClass,
+  formatIndex,
+} from "@/components/battle/panel";
+import {
+  CpuAnalysisSheet,
+  CpuDecisionBar,
+  type CpuDecisionLine,
+} from "@/components/battle/cpu-analysis";
+import {
+  CpuRetryNotice,
+  useLiveCpuRetry,
+} from "@/components/cpu-retry-status";
 import { FlyBrainStage } from "@/components/fly-brain-stage";
 import { ItemIcon } from "@/components/item-icon";
 import {
@@ -19,6 +44,7 @@ import {
 } from "@/components/battle-analysis-trace";
 import { StickToBottomFeed } from "@/components/stick-to-bottom-feed";
 import { createTeambuilderApiClient } from "@/lib/teambuilder/api-client";
+import { cn } from "@/lib/utils";
 import type { Team } from "@/lib/teambuilder/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5200/api";
@@ -916,7 +942,7 @@ async function postBattleContinue(params: { battleId: string }) {
   return response.json().catch(() => null);
 }
 
-function normalizePlaybackEvent(raw: unknown): PlaybackEvent | null {
+export function normalizePlaybackEvent(raw: unknown): PlaybackEvent | null {
   if (!raw || typeof raw !== "object") return null;
   const data = raw as Record<string, unknown>;
   const payload =
@@ -1808,7 +1834,7 @@ function eventKeyForDedup(event: PlaybackEvent) {
   return `${event.turn}:${event.type}:${event.text}`;
 }
 
-function buildTurnLogGroups(events: PlaybackEvent[]): TurnLogGroup[] {
+export function buildTurnLogGroups(events: PlaybackEvent[]): TurnLogGroup[] {
   const groups: TurnLogGroup[] = [];
   const groupByTurn = new Map<number, TurnLogGroup>();
   const seenBoundaryKeys = new Set<string>();
@@ -2128,13 +2154,18 @@ function PokemonSetupPanel(params: {
 }
 
 function AiVsAiSpectatorPanel({
+  index,
   onContinue,
   continuePending,
   isPlaybackRunning,
   awaitingAckEventSeq,
   statusText,
   battleState,
+  children,
 }: {
+  index?: number;
+  /** Optional feed under the controls, e.g. the interleaved AI decisions. */
+  children?: ReactNode;
   onContinue: () => void;
   continuePending: boolean;
   isPlaybackRunning: boolean;
@@ -2174,27 +2205,29 @@ function AiVsAiSpectatorPanel({
   }
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/2 p-5 backdrop-blur-sm">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-medium tracking-wide text-white/70">
-          AI vs AI — Spectator Mode
-        </h3>
-        <div className="text-xs text-white/45">
-          {battleState.isEnded
-            ? "Battle ended"
-            : isPlaybackRunning
-              ? "Playing..."
-              : continuePending
-                ? "Thinking..."
-                : "Ready"}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-3">
+    <Panel className={children ? "min-h-0 flex-1 max-lg:h-[28rem] max-lg:flex-none" : "shrink-0"}>
+      <PanelHeader
+        title="AI vs AI — Spectator Mode"
+        index={index}
+        label="Spectate"
+        aside={
+          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-white/45">
+            {battleState.isEnded
+              ? "Battle ended"
+              : isPlaybackRunning
+                ? "Playing..."
+                : continuePending
+                  ? "Thinking..."
+                  : "Ready"}
+          </span>
+        }
+      />
+      <div className="flex flex-wrap items-center gap-3 p-3">
         <button
           type="button"
           onClick={onContinue}
           disabled={!canRunTurn}
-          className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/8 disabled:cursor-not-allowed disabled:opacity-40"
+          className={cn(boxButtonClass, "px-4 py-1.5 text-sm font-medium text-white")}
         >
           {continuePending ? "Running..." : "Run Turn"}
         </button>
@@ -2204,19 +2237,90 @@ function AiVsAiSpectatorPanel({
             checked={autoRun}
             onChange={(e) => setAutoRun(e.target.checked)}
             disabled={battleState.isEnded}
-            className="accent-blue-500"
+            className="accent-[#3b5bff]"
           />
           Auto-run
         </label>
       </div>
-      <div className="mt-4 rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/70">
+      <div className="border-t border-white/[0.07] px-3 py-2 text-xs text-white/70">
         {statusText}
       </div>
-    </div>
+      {children && (
+        <>
+          <div className="shrink-0 border-t border-white/[0.07] px-3 pt-2 font-mono text-[10px] uppercase tracking-[0.14em] text-white/40">
+            Decision feed
+          </div>
+          <StickToBottomFeed className={cn("px-3 pb-3 pt-2", feedFadeClass)}>
+            {children}
+          </StickToBottomFeed>
+        </>
+      )}
+    </Panel>
   );
 }
 
-function BattleArena(params: {
+/** Fades the top edge of a scrolling feed so cut-off lines read as scrolled. */
+const feedFadeClass =
+  "[mask-image:linear-gradient(to_bottom,transparent,black_14px)]";
+
+/** Classes for the move and switch buttons. */
+const actionButtonClass =
+  "rounded-[4px] border border-white/10 bg-white/[0.02] px-3 py-2 text-left transition-colors hover:border-white/25 hover:bg-white/[0.05] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/40 disabled:cursor-not-allowed disabled:opacity-40";
+
+/** One line for the CPU decision bar: "CPU · Psychic Fangs · fly-cns · 94%". */
+function describeCpuDecisionLine(params: {
+  key: string;
+  label: string;
+  tone: "rose" | "blue";
+  decision:
+    | BattleState["lastCpuDecision"]
+    | CpuStreamDecisionSummary
+    | null
+    | undefined;
+  flyCns?: FlyCnsDiagnostics | null;
+  /** Turn of the decision that `flyCns` came with. */
+  flyTurn?: number;
+  thinking?: string | null;
+}): CpuDecisionLine {
+  const { decision, flyCns, flyTurn } = params;
+  // Fly diagnostics belong to the battle state's decision; only use them when
+  // they describe the same turn as the decision shown.
+  const fly =
+    flyCns &&
+    (decision?.turn == null || flyTurn == null || decision.turn === flyTurn)
+      ? flyCns
+      : null;
+  const selected = fly?.actions.find((action) => action.selected) ?? null;
+  const action = decision
+    ? (selected?.label ??
+      decision.moveName ??
+      decision.choice ??
+      decision.actionType ??
+      null)
+    : null;
+  const meta: string[] = [];
+  if (decision?.modelId) meta.push(decision.modelId);
+  if (selected) {
+    meta.push(`${Math.round(selected.probability * 100)}%`);
+  } else if (decision?.latencyMs != null) {
+    meta.push(
+      decision.latencyMs >= 1000
+        ? `${(decision.latencyMs / 1000).toFixed(1)}s`
+        : `${Math.round(decision.latencyMs)}ms`,
+    );
+  }
+  if (decision?.source === "fallback") meta.push("fallback");
+  return {
+    key: params.key,
+    label: params.label,
+    tone: params.tone,
+    action,
+    meta,
+    thinking: params.thinking,
+  };
+}
+
+export function BattleArena(params: {
   battleState: BattleState;
   cpuStream: CpuStreamState;
   visualHpPercents: { p1: number; p2: number } | null;
@@ -2380,163 +2484,220 @@ function BattleArena(params: {
       : [cpuTraceInput],
   );
 
+  const [analysisOpen, setAnalysisOpen] = useState(false);
+  const openAnalysis = () => setAnalysisOpen(true);
+  // One listener for CPU retries, shared by the decision bar and the sheet.
+  const cpuRetry = useLiveCpuRetry(battleState.battleId);
+  const showFlyStage = cpuModelProfile === "fly" && !isAiVsAi;
+  const panelIndex = (() => {
+    let next = 0;
+    return {
+      coach: copilotEnabled ? ++next : 0,
+      p1: ++next,
+      p2: ++next,
+      action: ++next,
+      fly: showFlyStage ? ++next : 0,
+      analysis: ++next,
+      log: ++next,
+    };
+  })();
+  const cpuThinkingLabel = cpuStream.isStreaming
+    ? CPU_THINKING_LABELS[cpuThinkingIndex]
+    : null;
+  const decisionLines: CpuDecisionLine[] = isAiVsAi
+    ? [
+        describeCpuDecisionLine({
+          key: "p1",
+          label: "P1",
+          tone: "blue",
+          decision: p1AiDecision,
+        }),
+        describeCpuDecisionLine({
+          key: "p2",
+          label: "P2",
+          tone: "rose",
+          decision: cpuDecisionSummary,
+          flyCns: battleState.lastCpuDecision?.flyCns,
+          flyTurn: battleState.lastCpuDecision?.turn,
+          thinking: cpuThinkingLabel,
+        }),
+      ]
+    : [
+        describeCpuDecisionLine({
+          key: "p2",
+          label: "CPU",
+          tone: "rose",
+          decision: cpuDecisionSummary,
+          flyCns: battleState.lastCpuDecision?.flyCns,
+          flyTurn: battleState.lastCpuDecision?.turn,
+          thinking: cpuThinkingLabel,
+        }),
+      ];
+  const analysisTitle = isAiVsAi ? "AI Analysis" : "CPU Analysis";
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/3 px-5 py-4 backdrop-blur">
-        <div>
-          <div className="text-xs tracking-wide text-white/45">BATTLE</div>
-          <div className="text-sm text-white/80">
-            Turn {battleState.currentTurn} • {battleState.phase ?? "active"}
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onLeaveBattle}
-          className="rounded-lg border border-white/10 bg-white/3 px-3 py-2 text-sm text-white/75 hover:bg-white/6"
-        >
-          Back to Setup
-        </button>
-      </div>
-
-      {battleState.isEnded && (
-        <div className={`${panelClass} text-center`}>
-          <div className="text-xs tracking-[0.18em] text-white/40">RESULT</div>
-          <div className="mt-2 text-3xl font-semibold tracking-tight text-white">
-            {battleState.winner ?? "Battle"} Wins
-          </div>
-          <div className="mt-2 text-sm text-white/55">Battle complete.</div>
-        </div>
-      )}
-
-      <div
-        className={
-          copilotEnabled
-            ? "grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)_300px] xl:grid-cols-[340px_minmax(0,1fr)_340px]"
-            : "grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_340px]"
-        }
-      >
-        {copilotEnabled && (
-          <div className="flex h-[72vh] flex-col">
-            <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <h3 className="text-sm font-medium tracking-wide text-white/70">
-                  Battle Coach
-                </h3>
-                <div className="text-[10px] uppercase tracking-[0.16em] text-white/35">
-                  {copilotMode === "deep" ? "Deep Coach" : "Coach"}
-                </div>
-              </div>
-              <div className="mb-3 flex min-w-0 items-center gap-2 text-[11px] text-white/45">
-                {/* The coach's own model, from the latest guidance; the CPU
-                    profile belongs to the opponent panel. */}
-                <span className="min-w-0 truncate">
-                  Coach model:{" "}
-                  {copilotHistory.at(-1)?.guidance.modelId ? (
-                    <span className="font-mono text-white/60">
-                      {copilotHistory.at(-1)?.guidance.modelId}
-                    </span>
-                  ) : (
-                    <span className="text-white/35">after first analysis</span>
-                  )}
-                </span>
-                {copilotLoading && (
-                  <span className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-white/20 border-t-blue-400" />
-                )}
-              </div>
-              <StickToBottomFeed className="rounded-xl border border-white/10 bg-black/50 p-3">
-                <CoachTrace
-                  entries={copilotHistory}
-                  loading={copilotLoading}
-                  loadingTurn={battleState.currentTurn}
-                  empty={
-                    <div className="text-xs text-white/40">
-                      Coach analysis will appear when it&apos;s your turn.
-                    </div>
-                  }
-                />
-              </StickToBottomFeed>
+    <div className="flex flex-col gap-3 lg:h-[calc(100dvh-5.75rem)] lg:min-h-[600px]">
+      <Panel className="shrink-0 flex-row items-center justify-between gap-3 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <SquareBadge>{formatIndex(battleState.currentTurn)}</SquareBadge>
+          <div className="min-w-0">
+            <div className="text-[13px] font-medium leading-tight text-white">
+              Turn {battleState.currentTurn}
+            </div>
+            <div className="truncate font-mono text-[10px] uppercase tracking-[0.12em] text-white/40">
+              {battleState.phase ?? "active"}
+              <span className="px-1 text-white/20">·</span>
+              {isAiVsAi ? "AI vs AI" : "vs CPU"}
+              <span className="px-1 text-white/20">·</span>
+              {CPU_PROFILE_BADGES[cpuModelProfile]}
             </div>
           </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <IndexTag label="Battle" className="max-sm:hidden" />
+          <button
+            type="button"
+            onClick={onLeaveBattle}
+            className={boxButtonClass}
+          >
+            Back to Setup
+          </button>
+        </div>
+      </Panel>
+
+      <div
+        className={cn(
+          "grid min-h-0 flex-1 gap-3 lg:grid-rows-[minmax(0,1fr)]",
+          copilotEnabled
+            ? "lg:grid-cols-[240px_minmax(0,1fr)_320px] xl:grid-cols-[260px_minmax(0,1fr)_340px] 2xl:grid-cols-[300px_minmax(0,1fr)_380px]"
+            : "lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_400px]",
+        )}
+      >
+        {copilotEnabled && (
+          <Panel className="min-h-0 max-lg:order-3 max-lg:h-80">
+            <PanelHeader
+              title="Battle Coach"
+              index={panelIndex.coach}
+              label={copilotMode === "deep" ? "Deep coach" : "Coach"}
+              aside={
+                copilotLoading && (
+                  <span className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-white/20 border-t-[#9aabff]" />
+                )
+              }
+            />
+            {/* The coach's own model, from the latest guidance; the CPU
+                profile belongs to the opponent panel. */}
+            <div className="flex min-w-0 shrink-0 items-center gap-1.5 border-b border-white/[0.07] px-3 py-1.5 font-mono text-[10px] text-white/40">
+              <span className="shrink-0 uppercase tracking-[0.12em]">
+                Model
+              </span>
+              {copilotHistory.at(-1)?.guidance.modelId ? (
+                <span className="truncate text-white/70">
+                  {copilotHistory.at(-1)?.guidance.modelId}
+                </span>
+              ) : (
+                <span className="truncate text-white/35">
+                  after first analysis
+                </span>
+              )}
+            </div>
+            <StickToBottomFeed className={cn("p-3", feedFadeClass)}>
+              <CoachTrace
+                entries={copilotHistory}
+                loading={copilotLoading}
+                loadingTurn={battleState.currentTurn}
+                empty={
+                  <div className="text-xs text-white/40">
+                    Coach analysis will appear when it&apos;s your turn.
+                  </div>
+                }
+              />
+            </StickToBottomFeed>
+          </Panel>
         )}
 
-        <div className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
+        <div className="flex min-h-0 min-w-0 flex-col gap-3 max-lg:order-1">
+          <div className="grid shrink-0 gap-3 sm:grid-cols-2">
             {[
               {
                 key: "p1" as const,
                 label: `${playerName}'s Pokémon`,
+                tag: "You",
+                index: panelIndex.p1,
                 p: battleState.p1Pokemon,
               },
               {
                 key: "p2" as const,
                 label: "Opponent",
+                tag: isAiVsAi ? "P2 AI" : "CPU",
+                index: panelIndex.p2,
                 p: battleState.p2Pokemon,
               },
-            ].map(({ key, label, p }) => {
+            ].map(({ key, label, tag, index, p }) => {
               const statusInfo = getStatusDisplay(p.status);
               const boosts = p.boosts;
               const itemLabel = formatItemName(p.item);
               const isUnknown = !p.name || p.name === "Unknown";
 
               return (
-                <div key={label} className={`${panelClass} group relative`}>
-                  <div className="mb-3 flex items-center justify-between">
-                    <span className="text-sm font-medium text-white/60">
-                      {label}
-                    </span>
-                    {p.ability && (
-                      <span className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2 py-0.5 text-[10px] text-cyan-300">
-                        {p.ability}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-3">
-                    {isUnknown ? (
-                      <div className="flex h-20 w-20 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-center text-xs text-white/40">
-                        Switching...
-                      </div>
-                    ) : (
-                      <BattlePokemonSprite
-                        name={p.name}
-                        alt={p.name}
-                        className="h-20 w-20 object-contain"
-                      />
-                    )}
+                <Panel key={label} className="group relative">
+                  <PanelHeader title={label} index={index} label={tag} />
+                  <div className="flex items-center gap-3 p-3">
+                    <CornerFrame className="shrink-0 p-1">
+                      {isUnknown ? (
+                        <div className="flex h-16 w-16 items-center justify-center text-center font-mono text-[10px] text-white/40">
+                          Switching...
+                        </div>
+                      ) : (
+                        <BattlePokemonSprite
+                          name={p.name}
+                          alt={p.name}
+                          className="h-16 w-16 object-contain"
+                        />
+                      )}
+                    </CornerFrame>
                     <div className="min-w-0 flex-1 space-y-1.5">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-lg font-semibold tracking-tight text-white">
+                      <div className="flex items-baseline gap-2">
+                        <span className="truncate text-[15px] font-semibold tracking-tight text-white">
                           {isUnknown ? "Switching..." : p.name}
                         </span>
                         {!isUnknown && (
-                          <span className="shrink-0 text-xs font-medium text-white/40">
+                          <span className="shrink-0 font-mono text-[10px] text-white/40">
                             Lv.{p.level ?? 100}
                           </span>
                         )}
                         {statusInfo && (
                           <span
-                            className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusInfo.colorClass}`}
+                            className={`shrink-0 self-center rounded-[3px] border px-1.5 py-px text-[10px] font-medium ${statusInfo.colorClass}`}
                           >
                             {statusInfo.emoji} {statusInfo.label}
                           </span>
                         )}
                       </div>
-                      <div className="flex justify-between text-xs text-white/60">
-                        <span>HP</span>
-                        <span>
-                          {Math.round(p.hp)}/{Math.round(p.maxHp)}
-                        </span>
-                      </div>
-                      <div className="h-2.5 w-full rounded-full bg-white/10">
-                        <div
-                          className={`h-2.5 rounded-full transition-all duration-500 ${getHpBarClass(
-                            currentHpPercents[key],
-                          )}`}
-                          style={{ width: `${currentHpPercents[key]}%` }}
-                        />
+                      <div>
+                        <div className="mb-1 flex justify-between font-mono text-[10.5px] text-white/50">
+                          <span>HP</span>
+                          <span className="tabular-nums text-white/75">
+                            {Math.round(p.hp)}/{Math.round(p.maxHp)}
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full rounded-[1px] bg-white/10">
+                          <div
+                            className={`h-1.5 rounded-[1px] transition-all duration-500 ${getHpBarClass(
+                              currentHpPercents[key],
+                            )}`}
+                            style={{ width: `${currentHpPercents[key]}%` }}
+                          />
+                        </div>
                       </div>
                       <div className="flex flex-wrap gap-1">
+                        {p.ability && (
+                          <span className="rounded-[3px] border border-white/10 bg-white/[0.03] px-1.5 py-0.5 text-[10px] text-white/60">
+                            {p.ability}
+                          </span>
+                        )}
                         {itemLabel && (
-                          <span className="inline-flex items-center gap-0.5 rounded-full border border-yellow-400/25 bg-yellow-400/10 px-1.5 py-0.5 text-[10px] text-yellow-300">
+                          <span className="inline-flex items-center gap-0.5 rounded-[3px] border border-white/10 bg-white/[0.03] px-1.5 py-0.5 text-[10px] text-white/75">
                             <ItemIcon item={itemLabel} className="-my-1.5 -ml-1" />
                             {itemLabel}
                           </span>
@@ -2545,7 +2706,7 @@ function BattleArena(params: {
                           Object.entries(boosts).map(([stat, amt]) => (
                             <span
                               key={stat}
-                              className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${
+                              className={`rounded-[3px] border px-1.5 py-0.5 font-mono text-[10px] font-medium ${
                                 amt > 0
                                   ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
                                   : "border-red-400/25 bg-red-400/10 text-red-300"
@@ -2558,13 +2719,13 @@ function BattleArena(params: {
                     </div>
                   </div>
                   {!isUnknown && (
-                    <div className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1 hidden w-56 -translate-x-1/2 rounded-lg border border-white/15 bg-zinc-900 p-3 text-xs shadow-xl group-hover:block">
+                    <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-1 hidden w-56 -translate-x-1/2 rounded-[4px] border border-white/15 bg-zinc-900 p-3 text-xs shadow-xl group-hover:block">
                       {p.types && p.types.length > 0 && (
                         <div className="mb-1.5 flex gap-1">
                           {p.types.map((t) => (
                             <span
                               key={t}
-                              className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-white/80"
+                              className="rounded-[3px] bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-white/80"
                             >
                               {t}
                             </span>
@@ -2604,264 +2765,334 @@ function BattleArena(params: {
                       )}
                     </div>
                   )}
-                </div>
+                </Panel>
               );
             })}
           </div>
 
+          {battleState.isEnded && (
+            <Panel className="min-h-0 flex-1 items-center justify-center px-4 py-8 text-center">
+              <IndexTag index={panelIndex.action} label="Result" />
+              <div className="mt-3 text-3xl font-semibold tracking-tight text-white">
+                {battleState.winner ?? "Battle"} Wins
+              </div>
+              <div className="mt-2 text-sm text-white/55">Battle complete.</div>
+            </Panel>
+          )}
+
           {!battleState.isEnded && gameMode === "ai-vs-ai" && (
             <AiVsAiSpectatorPanel
+              index={panelIndex.action}
               onContinue={onContinue}
               continuePending={continuePending}
               isPlaybackRunning={isPlaybackRunning}
               awaitingAckEventSeq={awaitingAckEventSeq}
               statusText={statusText}
               battleState={battleState}
-            />
+            >
+              <AiDecisionTrace
+                entries={aiDecisionHistory}
+                empty={
+                  <div className="text-xs text-white/40">
+                    Run a turn to see AI decisions.
+                  </div>
+                }
+              />
+            </AiVsAiSpectatorPanel>
           )}
 
           {!battleState.isEnded && gameMode !== "ai-vs-ai" && (
-            <div className={panelClass}>
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <h3 className="text-sm font-medium tracking-wide text-white/70">
-                  Choose Your Action
-                </h3>
-                <div className="text-xs text-white/45">
-                  {playerCanAct ? "Your turn" : "Input locked"}
-                </div>
-              </div>
-              {battleState.phase === "team-preview" ? (
-                <div className="space-y-3">
-                  <div className="text-xs text-white/55">
-                    Submit your team order (digits 1-6, each once).
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <input
-                      value={teamOrder}
-                      onChange={(e) =>
-                        setTeamOrder(
-                          e.target.value.replace(/[^1-6]/g, "").slice(0, 6),
-                        )
-                      }
-                      placeholder="123456"
-                      className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/20"
-                    />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onSubmitAction({
-                          choice: `team ${teamOrder || "123456"}`,
-                          label: `team ${teamOrder || "123456"}`,
-                        })
-                      }
-                      disabled={!playerCanAct}
-                      className="rounded-lg border border-white/10 bg-white/3 px-3 py-2 text-sm text-white/80 transition-colors hover:bg-white/6 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Confirm Team Order
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {!forcedSwitchForP1 &&
-                    battleState.availableMoves.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="text-xs uppercase tracking-wide text-white/45">
-                          Moves
-                        </div>
-                        {battleState.availableMoves?.length === 1 &&
-                          battleState.p1Pokemon.item &&
-                          /choice/i.test(battleState.p1Pokemon.item) && (
-                            <div className="mb-2 rounded-md border border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-300">
-                              🔒 Locked into{" "}
-                              {battleState.availableMoves[0]?.name} by{" "}
-                              <ItemIcon
-                                item={battleState.p1Pokemon.item}
-                                className="-my-1.5"
-                              />
-                              {battleState.p1Pokemon.item}
-                            </div>
-                          )}
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                          {battleState.availableMoves.map((move, index) => {
-                            const choice =
-                              move.choice ?? `move ${move.index ?? index + 1}`;
-                            const moveIndex = move.index ?? index + 1;
-                            return (
-                              <button
-                                key={`${move.name}-${index}`}
-                                type="button"
-                                onClick={() =>
-                                  onSubmitAction({
-                                    choice,
-                                    label: move.name,
-                                    moveIndex,
-                                  })
-                                }
-                                disabled={!playerCanAct}
-                                className="rounded-xl border border-white/10 bg-white/2 px-4 py-3 text-left transition-colors hover:border-white/20 hover:bg-white/4 disabled:cursor-not-allowed disabled:opacity-40"
-                              >
-                                <div className="text-sm font-medium tracking-tight text-white">
-                                  {move.name}
-                                </div>
-                                <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-white/55">
-                                  <span>{move.type}</span>
-                                  {move.category && (
-                                    <span>{move.category}</span>
-                                  )}
-                                  {move.power ? (
-                                    <span>BP {move.power}</span>
-                                  ) : null}
-                                  <span>
-                                    Acc{" "}
-                                    {move.accuracy === true
-                                      ? "—"
-                                      : (move.accuracy ?? "—")}
-                                  </span>
-                                </div>
-                                <div className="mt-1 text-xs text-white/40">
-                                  PP {move.pp}/{move.maxPp}
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
+            <Panel className="@container min-h-0 flex-1">
+              <PanelHeader
+                title="Choose Your Action"
+                index={panelIndex.action}
+                label="Action"
+                aside={
+                  <span
+                    className={cn(
+                      "font-mono text-[10px] uppercase tracking-[0.12em]",
+                      playerCanAct ? ACCENT_TEXT : "text-white/35",
                     )}
-                  {(battleState.availableSwitches?.length ?? 0) > 0 && (
-                    <div className="space-y-2">
-                      <div className="text-xs uppercase tracking-wide text-white/45">
-                        Switch
-                      </div>
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        {battleState.availableSwitches?.map((option) => (
-                          <button
-                            key={option.choice}
-                            type="button"
-                            onClick={() =>
-                              onSubmitAction({
-                                choice: option.choice,
-                                label: `switch ${option.name}`,
-                              })
-                            }
-                            disabled={!playerCanAct}
-                            className="rounded-xl border border-white/10 bg-white/2 px-4 py-3 text-left transition-colors hover:border-white/20 hover:bg-white/4 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            <div className="flex items-center gap-2">
+                  >
+                    {playerCanAct ? "Your turn" : "Input locked"}
+                  </span>
+                }
+              />
+              <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                {battleState.phase === "team-preview" ? (
+                  <div className="space-y-3">
+                    <div className="text-xs text-white/55">
+                      Submit your team order (digits 1-6, each once).
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        value={teamOrder}
+                        onChange={(e) =>
+                          setTeamOrder(
+                            e.target.value.replace(/[^1-6]/g, "").slice(0, 6),
+                          )
+                        }
+                        placeholder="123456"
+                        className="rounded-[4px] border border-white/10 bg-black/40 px-3 py-1.5 font-mono text-sm text-white outline-none placeholder:text-white/30 focus:border-white/25"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onSubmitAction({
+                            choice: `team ${teamOrder || "123456"}`,
+                            label: `team ${teamOrder || "123456"}`,
+                          })
+                        }
+                        disabled={!playerCanAct}
+                        className={cn(boxButtonClass, "py-1.5 text-sm")}
+                      >
+                        Confirm Team Order
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {!forcedSwitchForP1 &&
+                      battleState.availableMoves.length > 0 && (
+                        <div>
+                          <div className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-white/40">
+                            Moves
+                          </div>
+                          {battleState.availableMoves?.length === 1 &&
+                            battleState.p1Pokemon.item &&
+                            /choice/i.test(battleState.p1Pokemon.item) && (
+                              <div className="mb-2 rounded-[4px] border border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-300">
+                                🔒 Locked into{" "}
+                                {battleState.availableMoves[0]?.name} by{" "}
+                                <ItemIcon
+                                  item={battleState.p1Pokemon.item}
+                                  className="-my-1.5"
+                                />
+                                {battleState.p1Pokemon.item}
+                              </div>
+                            )}
+                          <div className="grid grid-cols-1 gap-2 @sm:grid-cols-2">
+                            {battleState.availableMoves.map((move, index) => {
+                              const choice =
+                                move.choice ?? `move ${move.index ?? index + 1}`;
+                              const moveIndex = move.index ?? index + 1;
+                              return (
+                                <button
+                                  key={`${move.name}-${index}`}
+                                  type="button"
+                                  onClick={() =>
+                                    onSubmitAction({
+                                      choice,
+                                      label: move.name,
+                                      moveIndex,
+                                    })
+                                  }
+                                  disabled={!playerCanAct}
+                                  className={actionButtonClass}
+                                >
+                                  <div className="flex items-baseline justify-between gap-2">
+                                    <span className="truncate text-[13px] font-medium tracking-tight text-white">
+                                      {move.name}
+                                    </span>
+                                    <span className="shrink-0 font-mono text-[10px] tabular-nums text-white/40">
+                                      PP {move.pp}/{move.maxPp}
+                                    </span>
+                                  </div>
+                                  <div className="mt-0.5 truncate font-mono text-[10.5px] text-white/50">
+                                    {[
+                                      move.type,
+                                      move.category,
+                                      move.power ? `BP ${move.power}` : null,
+                                      `Acc ${
+                                        move.accuracy === true
+                                          ? "—"
+                                          : (move.accuracy ?? "—")
+                                      }`,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" · ")}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    {(battleState.availableSwitches?.length ?? 0) > 0 && (
+                      <div>
+                        <div className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-white/40">
+                          Switch
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 @sm:grid-cols-2 @3xl:grid-cols-3">
+                          {battleState.availableSwitches?.map((option) => (
+                            <button
+                              key={option.choice}
+                              type="button"
+                              onClick={() =>
+                                onSubmitAction({
+                                  choice: option.choice,
+                                  label: `switch ${option.name}`,
+                                })
+                              }
+                              disabled={!playerCanAct}
+                              className={cn(
+                                actionButtonClass,
+                                "flex items-center gap-2 px-2.5 py-1.5",
+                              )}
+                            >
                               <OptionalBattleSprite
                                 src={getSpriteFallbackUrl(option.name)}
                                 alt={option.name}
                                 width={32}
                                 height={32}
-                                className="h-8 w-8 object-contain"
+                                className="-my-1 h-8 w-8 shrink-0 object-contain"
                               />
                               <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5 text-sm font-medium tracking-tight text-white">
-                                  {option.name}
-                                  <span className="text-[10px] font-normal text-white/40">
+                                <div className="flex items-baseline gap-1.5">
+                                  <span className="truncate text-[13px] font-medium tracking-tight text-white">
+                                    {option.name}
+                                  </span>
+                                  <span className="shrink-0 font-mono text-[10px] text-white/35">
                                     Lv.{option.level ?? 100}
                                   </span>
+                                  <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums text-white/50">
+                                    HP {Math.round(option.hp ?? 0)}/
+                                    {Math.round(option.maxHp ?? 0)}
+                                    {option.status ? ` • ${option.status}` : ""}
+                                  </span>
                                 </div>
-                                <div className="mt-0.5 text-xs text-white/55">
-                                  HP {Math.round(option.hp ?? 0)}/
-                                  {Math.round(option.maxHp ?? 0)}
-                                  {option.status ? ` • ${option.status}` : ""}
-                                </div>
-                                <div className="mt-0.5 flex flex-wrap gap-x-1.5 text-[10px] text-white/40">
+                                <div className="mt-0.5 flex min-w-0 items-center gap-x-1.5 text-[10px] text-white/40">
                                   {option.ability && (
-                                    <span>{option.ability}</span>
+                                    <span className="truncate">
+                                      {option.ability}
+                                    </span>
                                   )}
                                   {option.item && (
-                                    <span className="inline-flex items-center">
+                                    <span className="inline-flex min-w-0 items-center">
                                       <ItemIcon
                                         item={option.item}
                                         className="-my-1.5 -ml-1"
                                       />
-                                      {option.item}
+                                      <span className="truncate">
+                                        {option.item}
+                                      </span>
                                     </span>
                                   )}
                                 </div>
                               </div>
-                            </div>
-                          </button>
-                        ))}
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
-                  {!forcedSwitchForP1 &&
-                    battleState.availableMoves.length === 0 &&
-                    (battleState.availableSwitches?.length ?? 0) === 0 && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onSubmitAction({
-                            choice: "default",
-                            label: "default",
-                          })
-                        }
-                        disabled={!playerCanAct}
-                        className="rounded-lg border border-white/10 bg-white/3 px-3 py-2 text-sm text-white/80 transition-colors hover:bg-white/6 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        Submit Default Action
-                      </button>
                     )}
-                  {battleState.phase === "awaiting-forced-switch-p2" &&
-                    battleState.awaitingAckEventSeq == null && (
-                      <button
-                        type="button"
-                        onClick={onContinue}
-                        disabled={
-                          continuePending ||
-                          moveSubmitPending ||
-                          isSubmittingMove
-                        }
-                        className="rounded-lg border border-white/10 bg-white/3 px-3 py-2 text-sm text-white/80 transition-colors hover:bg-white/6 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        {continuePending ? "Continuing..." : "Continue"}
-                      </button>
-                    )}
-                </div>
-              )}
-              <div className="mt-4 rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/70">
-                {statusText}
+                    {!forcedSwitchForP1 &&
+                      battleState.availableMoves.length === 0 &&
+                      (battleState.availableSwitches?.length ?? 0) === 0 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onSubmitAction({
+                              choice: "default",
+                              label: "default",
+                            })
+                          }
+                          disabled={!playerCanAct}
+                          className={cn(boxButtonClass, "py-1.5 text-sm")}
+                        >
+                          Submit Default Action
+                        </button>
+                      )}
+                    {battleState.phase === "awaiting-forced-switch-p2" &&
+                      battleState.awaitingAckEventSeq == null && (
+                        <button
+                          type="button"
+                          onClick={onContinue}
+                          disabled={
+                            continuePending ||
+                            moveSubmitPending ||
+                            isSubmittingMove
+                          }
+                          className={cn(boxButtonClass, "py-1.5 text-sm")}
+                        >
+                          {continuePending ? "Continuing..." : "Continue"}
+                        </button>
+                      )}
+                  </div>
+                )}
               </div>
-              {moveSubmitError && (
-                <div className="mt-3 rounded-lg border border-white/10 bg-white/2 px-3 py-2 text-sm text-white/65">
-                  {moveSubmitError}
+              <div className="shrink-0 space-y-1.5 border-t border-white/[0.07] px-3 py-2 text-xs">
+                <div className="flex min-w-0 items-center gap-2 text-white/70">
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 shrink-0 rounded-full",
+                      playerCanAct ? ACCENT_BG : "bg-white/25",
+                    )}
+                  />
+                  <span className="min-w-0">{statusText}</span>
                 </div>
-              )}
-              {legalOptionsMessage && (
-                <div className="mt-3 rounded-lg border border-white/10 bg-white/2 px-3 py-2 text-xs text-white/60">
-                  {legalOptionsMessage}
-                </div>
-              )}
-            </div>
+                {moveSubmitError && (
+                  <div className="rounded-[4px] border border-white/10 bg-white/[0.02] px-2.5 py-1.5 text-white/65">
+                    {moveSubmitError}
+                  </div>
+                )}
+                {legalOptionsMessage && (
+                  <div className="rounded-[4px] border border-white/10 bg-white/[0.02] px-2.5 py-1.5 text-[11px] text-white/60">
+                    {legalOptionsMessage}
+                  </div>
+                )}
+              </div>
+            </Panel>
           )}
         </div>
 
-        <div className="flex h-[72vh] min-h-0 flex-col gap-4">
-          <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-medium tracking-wide text-white/70">
-                Turn Logger
-              </h3>
-              <div className="text-xs text-white/50">
-                Acked: {lastAckedSeq}
-                {awaitingAckEventSeq != null
-                  ? ` • Pending: ${awaitingAckEventSeq}`
-                  : ""}
-              </div>
-            </div>
+        <div className="flex min-h-0 min-w-0 flex-col gap-3 max-lg:order-2">
+          {showFlyStage && (
+            <FlyBrainStage
+              index={panelIndex.fly}
+              diagnostics={battleState.lastCpuDecision?.flyCns}
+              turn={battleState.lastCpuDecision?.turn}
+              onOpenAnalysis={openAnalysis}
+            />
+          )}
+
+          <CpuDecisionBar
+            title={isAiVsAi ? "AI decisions" : "CPU decision"}
+            index={panelIndex.analysis}
+            lines={decisionLines}
+            notice={
+              <CpuRetryNotice
+                retry={cpuRetry}
+                decision={battleState.lastCpuDecision}
+                variant="inline"
+              />
+            }
+            onOpen={openAnalysis}
+          />
+
+          <Panel className="min-h-[120px] flex-1 max-lg:h-80 max-lg:flex-none">
+            <PanelHeader
+              title="Turn Log"
+              index={panelIndex.log}
+              label="Log"
+              aside={
+                <span className="font-mono text-[10px] tabular-nums text-white/40">
+                  Acked {lastAckedSeq}
+                  {awaitingAckEventSeq != null
+                    ? ` · Pending ${awaitingAckEventSeq}`
+                    : ""}
+                </span>
+              }
+            />
             {playbackError && (
-              <div className="mb-3 rounded-md border border-white/10 bg-white/2 px-2.5 py-2 text-xs text-white/65">
+              <div className="shrink-0 border-b border-white/[0.07] px-3 py-2 text-xs text-white/65">
                 {playbackError}
               </div>
             )}
             <div
               ref={loggerRef}
-              className="flex-1 overflow-y-auto rounded-xl border border-white/10 bg-black/50 p-3"
+              className={cn("min-h-0 flex-1 overflow-y-auto px-3 py-2", feedFadeClass)}
             >
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {turnLogGroups
                   .filter((group) => group.turn <= 0)
                   .flatMap((group) => group.events)
@@ -2869,7 +3100,7 @@ function BattleArena(params: {
                   .map((event) => (
                     <div
                       key={`opening-${event.seq}`}
-                      className="text-sm leading-relaxed text-white/85"
+                      className="text-[12.5px] leading-relaxed text-white/85"
                     >
                       {event.text}
                     </div>
@@ -2878,20 +3109,18 @@ function BattleArena(params: {
                 {turnLogGroups
                   .filter((group) => group.turn > 0)
                   .map((group) => (
-                    <section
-                      key={`turn-${group.turn}`}
-                      className="border-t border-white/10 pt-2"
-                    >
-                      <div className="mb-2 text-xl font-bold text-white">
-                        Turn {group.turn}
+                    <section key={`turn-${group.turn}`}>
+                      <div className="mb-1 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-white/45">
+                        <span>Turn {formatIndex(group.turn)}</span>
+                        <span className="h-px flex-1 bg-white/10" />
                       </div>
-                      <div className="space-y-1.5">
+                      <div className="space-y-1">
                         {group.events
                           .filter((event) => !isControlEvent(event.type))
                           .map((event) => (
                             <div
                               key={event.seq}
-                              className={`text-sm leading-relaxed ${
+                              className={`text-[12.5px] leading-relaxed ${
                                 awaitingAckEventSeq === event.seq
                                   ? "text-white"
                                   : event.seq <= lastAckedSeq
@@ -2899,59 +3128,54 @@ function BattleArena(params: {
                                     : "text-white/60"
                               }`}
                             >
-                              <div>
-                                <div>{event.text}</div>
-                              </div>
+                              {event.text}
                             </div>
                           ))}
                       </div>
                     </section>
                   ))}
                 {turnLogGroups.length === 0 && (
-                  <div className="text-sm text-white/50">No events yet.</div>
+                  <div className="text-xs text-white/50">No events yet.</div>
                 )}
               </div>
             </div>
-          </div>
+          </Panel>
+        </div>
+      </div>
 
-          {cpuModelProfile === "fly" && !isAiVsAi && (
-            <FlyBrainStage
-              diagnostics={battleState.lastCpuDecision?.flyCns}
-              turn={battleState.lastCpuDecision?.turn}
+      <CpuAnalysisSheet
+        open={analysisOpen}
+        onOpenChange={setAnalysisOpen}
+        title={analysisTitle}
+        subtitle={
+          <>
+            {CPU_PROFILE_BADGES[cpuModelProfile]}
+            {cpuDecisionSummary?.modelId
+              ? ` · ${cpuDecisionSummary.modelId}`
+              : ""}
+          </>
+        }
+      >
+        <CpuRetryNotice
+          retry={cpuRetry}
+          decision={battleState.lastCpuDecision}
+        />
+        <StickToBottomFeed className="rounded-[4px] border border-white/10 bg-black/40 p-3">
+          {isAiVsAi ? (
+            <AiDecisionTrace
+              entries={aiDecisionHistory}
+              empty={
+                <div className="text-xs text-white/40">
+                  Run a turn to see AI decisions.
+                </div>
+              }
             />
-          )}
-
-          <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-medium text-white/70">
-                {isAiVsAi ? "AI Analysis" : "CPU Analysis"}
-              </div>
-              <div className="flex items-center gap-2 text-[7px] uppercase tracking-[0.16em] text-white/35">
-                {CPU_PROFILE_BADGES[cpuModelProfile]}
-                {cpuDecisionSummary?.modelId && (
-                  <span className="text-white/25 text-[7px] font-mono text-xs">
-                    {cpuDecisionSummary.modelId}
-                  </span>
-                )}
-              </div>
-            </div>
-            <CpuRetryStatus battleId={battleState.battleId} decision={battleState.lastCpuDecision} />
-            <StickToBottomFeed className="mt-3 rounded-xl border border-white/10 bg-black/40 p-3">
-              {isAiVsAi ? (
-                <AiDecisionTrace
-                  entries={aiDecisionHistory}
-                  empty={
-                    <div className="text-xs text-white/40">
-                      Run a turn to see AI decisions.
-                    </div>
-                  }
-                />
-              ) : (
-                <div className="space-y-3">
-                  <AiDecisionTrace entries={aiDecisionHistory} />
+          ) : (
+            <div className="space-y-3">
+              <AiDecisionTrace entries={aiDecisionHistory} />
               {cpuStream.isStreaming ? (
                 <div className="space-y-3">
-                  <div className="rounded-xl border border-blue-400/15 bg-blue-400/5 p-3">
+                  <div className="rounded-[4px] border border-blue-400/15 bg-blue-400/5 p-3">
                     <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-blue-300/70">
                       Thinking
                     </div>
@@ -2968,13 +3192,13 @@ function BattleArena(params: {
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="rounded-lg border border-white/10 bg-white/3 px-3 py-2">
+                    <div className="rounded-[4px] border border-white/10 bg-white/3 px-3 py-2">
                       <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">
                         Source
                       </div>
                       <div className="mt-1 text-xs text-white/80">model</div>
                     </div>
-                    <div className="rounded-lg border border-white/10 bg-white/3 px-3 py-2">
+                    <div className="rounded-[4px] border border-white/10 bg-white/3 px-3 py-2">
                       <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">
                         Status
                       </div>
@@ -2999,7 +3223,7 @@ function BattleArena(params: {
                   {!hasStructuredCpuSummary &&
                     !cpuDecisionSummary?.truncated &&
                     !battleState.lastCpuDecision?.flyCns && (
-                      <div className="rounded-lg border border-amber-400/15 bg-amber-400/5 px-3 py-2 text-xs text-amber-200/85">
+                      <div className="rounded-[4px] border border-amber-400/15 bg-amber-400/5 px-3 py-2 text-xs text-amber-200/85">
                         Could not parse structured recommendation cleanly.
                       </div>
                     )}
@@ -3011,12 +3235,10 @@ function BattleArena(params: {
                     : "Live CPU stream unavailable. Final CPU decision will appear after their move."}
                 </div>
               ) : null}
-                </div>
-              )}
-            </StickToBottomFeed>
-          </div>
-        </div>
-      </div>
+            </div>
+          )}
+        </StickToBottomFeed>
+      </CpuAnalysisSheet>
     </div>
   );
 }
